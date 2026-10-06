@@ -1,10 +1,7 @@
 # saileshGPT
 
-## Project status
-
-This repository contains the Python dependency list and environment setup
-instructions. Application code and its run command/navigation guide have not
-been added yet.
+SaileshGPT is a FastAPI chat assistant with saved conversation history,
+incremental response streaming, and document uploads for chat-based search.
 
 ## Requirements
 
@@ -45,22 +42,34 @@ python -m pip install -r requirement.txt
 
 ## Run the project
 
-The dependencies are prepared for a FastAPI application, but there is no
-application entry point in the repository yet. Add the appropriate Uvicorn
-command here when the app's entry point is available.
+Start the app from the repository root after installing dependencies and
+setting the environment variables:
+
+```powershell
+python -m uvicorn app:app --reload --port 8080
+```
+
+Open `http://127.0.0.1:8080` in a browser. Conversations are saved in
+`database_chatbot.db` and scoped to the browser session. Assistant responses
+stream as they are generated. Choose the Gemini model from the selector in the
+chat header; the selected model is remembered in the browser and used for
+subsequent messages.
+
+Use the attachment button to upload PDF, DOCX, TXT, Markdown, Python, or CSV
+documents up to 20 MB. Uploaded documents are indexed for the current
+conversation in the local `chroma-db` directory.
 
 ## Navigate the repository
 
-At present, the repository contains:
+The main application files are:
 
-- `README.md` — setup and project instructions
+- `app.py` — FastAPI routes for chat, history, and uploads
+- `templates/index.html` — chat interface
+- `database.py` — conversation and message persistence
+- `rag.py` — document extraction and search indexing
 - `requirement.txt` — Python dependencies
-- `.env.example` — names of the API keys the application will need
+- `.env.example` — required API key names
 - `LICENSE` — licensing terms
-- `.gitignore` — files and local artifacts excluded from version control
-
-Application folders and navigation instructions can be added when the
-application code is introduced.
 
 ## Environment variables
 
