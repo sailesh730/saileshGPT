@@ -1,0 +1,65 @@
+name: CI/CD
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  docker-build-and-smoke-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      IMAGE_NAME: saileshgpt
+      PORT: 8080
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:ci
+          build-args: |
+            PORT=8080
+
+      - name: Run app container and verify the endpoint
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+        run: |
+          docker run -d --name saileshgpt-ci \
+            -p 8080:8080 \
+            -e PORT=8080 \
+            -e GOOGLE_API_KEY \
+            -e TAVILY_API_KEY \
+            -e OPENWEATHER_API_KEY \
+            ${{ env.IMAGE_NAME }}:ci
+
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/ >/tmp/saileshgpt_home.html 2>/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+
+          curl -fsS http://127.0.0.1:8080/ >/dev/null
+
+      - name: Show container logs on failure
+        if: failure()
+        run: docker logs saileshgpt-ci --tail 100
+
+      - name: Cleanup container
+        if: always()
+        run: docker rm -f saileshgpt-ci || true
