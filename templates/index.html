@@ -229,6 +229,28 @@
       white-space: pre-wrap; word-wrap: break-word; overflow-wrap: anywhere;
     }
 
+    .message-content { flex: 1; min-width: 0; }
+    .user .message-content { max-width: min(100%, 600px); }
+
+    .tool-activity {
+      display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+      margin: 0 0 8px;
+    }
+    .tool-call {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 5px 9px; border: 1px solid var(--border); border-radius: 9px;
+      background: var(--surface); color: var(--muted);
+      font-size: 0.76rem; line-height: 1.35;
+    }
+    .tool-call-indicator {
+      width: 7px; height: 7px; flex: 0 0 auto;
+      border-radius: 50%; background: var(--accent);
+    }
+    .tool-call.complete .tool-call-indicator { background: var(--success); }
+    .tool-call.complete { color: var(--text); }
+    .tool-call.failed .tool-call-indicator { background: var(--pink); }
+    .tool-call-status { color: var(--muted); }
+
     .bubble.typing::after {
       content: ""; display: inline-block; width: 8px; height: 8px;
       border-radius: 50%; background: var(--accent);
@@ -373,7 +395,7 @@
           <select class="model-select" id="modelSelect" aria-label="Select AI model" title="Select AI model" disabled>
             <option>Loading models…</option>
           </select>
-          <span class="pill">Streaming on</span>
+          <span class="pill">Qwen + Gemini</span>
         </div>
       </header>
 
@@ -437,15 +459,84 @@
       avatar.className = 'avatar';
       avatar.textContent = sender === 'user' ? 'You' : 'AI';
 
+      const content = document.createElement('div');
+      content.className = 'message-content';
+
+      const toolActivity = document.createElement('div');
+      toolActivity.className = 'tool-activity hidden';
+      toolActivity.setAttribute('aria-live', 'polite');
+
       const bubble = document.createElement('div');
       bubble.className = 'bubble';
       bubble.textContent = text;
 
       message.appendChild(avatar);
-      message.appendChild(bubble);
+      content.appendChild(toolActivity);
+      content.appendChild(bubble);
+      message.appendChild(content);
       chatArea.appendChild(message);
       chatArea.scrollTop = chatArea.scrollHeight;
       return bubble;
+    }
+
+    function updateToolActivity(bubble, event) {
+      const activity = bubble.parentElement.querySelector('.tool-activity');
+      activity.classList.remove('hidden');
+      const nearBottom = chatArea.scrollHeight - chatArea.scrollTop - chatArea.clientHeight < 140;
+      const callId = event.tool_call_id || '';
+      const toolName = event.tool || 'tool';
+      let item = Array.from(activity.children).find((candidate) =>
+        callId && candidate.dataset.toolCallId === callId
+      );
+
+      if (event.type === 'tool_start') {
+        if (!item) {
+          item = document.createElement('div');
+          item.className = 'tool-call';
+          item.dataset.toolCallId = callId;
+          item.dataset.toolName = toolName;
+
+          const indicator = document.createElement('span');
+          indicator.className = 'tool-call-indicator';
+          indicator.setAttribute('aria-hidden', 'true');
+
+          const label = document.createElement('span');
+          label.textContent = ({
+            browser_read: 'Read webpage',
+            wed_search: 'Web search',
+            calculator: 'Calculator',
+            get_weather: 'Weather lookup',
+            search_uploaded_document: 'Search uploaded document',
+            recall_memory: 'Recall memory',
+            rember_this: 'Save memory'
+          })[toolName] || toolName;
+
+          const status = document.createElement('span');
+          status.className = 'tool-call-status';
+          status.textContent = 'Running';
+
+          item.append(indicator, label, status);
+          activity.appendChild(item);
+        }
+      } else if (event.type === 'tool_complete') {
+        if (!item) {
+          item = Array.from(activity.children).find((candidate) =>
+            candidate.dataset.toolName === toolName && !candidate.classList.contains('complete')
+          );
+        }
+        if (item) {
+          item.classList.add('complete');
+          item.querySelector('.tool-call-status').textContent = 'Done';
+        }
+      }
+      if (nearBottom) chatArea.scrollTop = chatArea.scrollHeight;
+    }
+
+    function markPendingToolsFailed(bubble) {
+      bubble.parentElement.querySelectorAll('.tool-call:not(.complete)').forEach((item) => {
+        item.classList.add('failed');
+        item.querySelector('.tool-call-status').textContent = 'Failed';
+      });
     }
 
     async function loadModels() {
@@ -641,6 +732,8 @@
               if (event.type === 'delta') {
                 pending += event.text;
                 if (!frame) frame = requestAnimationFrame(flush);
+              } else if (event.type === 'tool_start' || event.type === 'tool_complete') {
+                updateToolActivity(replyBubble, event);
               } else if (event.type === 'complete') {
                 if (frame) cancelAnimationFrame(frame);
                 flush();
@@ -653,6 +746,7 @@
                 receivedComplete = true;
                 refreshConversationList().catch(showHistoryError);
               } else if (event.type === 'error') {
+                markPendingToolsFailed(replyBubble);
                 throw new Error(event.message);
               }
             }

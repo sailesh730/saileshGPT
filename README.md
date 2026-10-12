@@ -40,6 +40,12 @@ Install the project dependencies inside the activated environment:
 python -m pip install -r requirement.txt
 ```
 
+Install the Chromium browser used by the webpage-reading tool:
+
+```powershell
+python -m playwright install chromium
+```
+
 ## Run the project
 
 Start the app from the repository root after installing dependencies and
@@ -50,10 +56,20 @@ python -m uvicorn app:app --reload --port 8080
 ```
 
 Open `http://127.0.0.1:8080` in a browser. Conversations are saved in
-`database_chatbot.db` and scoped to the browser session. Assistant responses
-stream as they are generated. Choose the Gemini model from the selector in the
-chat header; the selected model is remembered in the browser and used for
-subsequent messages.
+`database_chatbot.db` and scoped to the browser session. Select either the
+local Ollama model `qwen2.5:0.5b` or one of the available Gemini chat models
+in the chat header. Gemini 2.5 Flash and Flash-Lite have free-tier access
+subject to Google's account eligibility and rate limits. Other Gemini models
+may have different availability or pricing. All listed models support chat and
+tool calls, and tool activity is shown in the conversation as it happens. The
+assistant can read a specific public webpage when asked. To use Qwen, install
+and start Ollama, then pull the model:
+
+```powershell
+ollama pull qwen2.5:0.5b
+```
+
+The model selector in the chat header shows the active model.
 
 Use the attachment button to upload PDF, DOCX, TXT, Markdown, Python, or CSV
 documents up to 20 MB. Uploaded documents are indexed for the current
@@ -68,7 +84,7 @@ The main application files are:
 - `database.py` — conversation and message persistence
 - `rag.py` — document extraction and search indexing
 - `requirement.txt` — Python dependencies
-- `.env.example` — required API key names
+- `.env.example` — optional API key names for web search and weather
 - `LICENSE` — licensing terms
 
 ## Environment variables
@@ -79,11 +95,13 @@ Copy the example file to create your local configuration:
 Copy-Item .env.example .env
 ```
 
-Set your Google AI and Tavily API keys in `.env`:
+Set `GOOGLE_API_KEY` to enable Gemini. The Tavily key enables web search; the
+OpenWeather key is optional and enables weather lookup:
 
 ```text
 GOOGLE_API_KEY=your_google_api_key
 TAVILY_API_KEY=your_tavily_api_key
+OPENWEATHER_API_KEY=your_openweather_api_key
 ```
 
 Keep real credentials in `.env` only. `.env` is ignored by Git; do not commit

@@ -8,6 +8,11 @@ from langchain_tavily import TavilySearch
 from database import save_memory,get_chat_history
 load_dotenv()
 from rag import retrive_from_rag
+from urllib.parse import urlparse
+from ipaddress import ip_address
+
+from playwright.sync_api import sync_playwright
+
 # like a chatpt 
 
 
@@ -66,6 +71,8 @@ def recall_memory(query:str)->str:
 
 
 # weather_tool.py
+
+
 
 
 
@@ -170,3 +177,82 @@ def search_uploaded_document(query:str, config:RunnableConfig) -> str:
         thread_id = thread_id
     )
 
+
+
+
+
+
+# for brower automation
+def validate_url(url: str) -> bool:
+    """Allow public HTTP/HTTPS website URLs only."""
+    try:
+        parsed = urlparse(url)
+
+        if parsed.scheme not in ("http", "https"):
+            return False
+
+        if not parsed.hostname or parsed.username or parsed.password:
+            return False
+
+        host = parsed.hostname.lower()
+
+        if host == "localhost" or host.endswith(".localhost"):
+            return False
+
+        # Reject direct connections to private/reserved IPs.
+        try:
+            ip = ip_address(host)
+            if not ip.is_global:
+                return False
+        except ValueError:
+            pass  # Hostname; DNS must also be checked in production.
+
+        return True
+
+    except (ValueError, TypeError):
+        return False
+
+
+@tool
+def browser_read(url: str) -> str:
+    """Open a public website and return its title and readable text.
+    Use this when the user asks the AI to visit or read a webpage.
+    Input: a complete HTTP or HTTPS URL.
+    """
+    if not validate_url(url):
+        return "Invalid URL. Provide a public HTTP/HTTPS website."
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+
+            page = browser.new_page()
+            page.set_default_timeout(15000)
+
+            response = page.goto(
+                url,
+                wait_until="domcontentloaded",
+                timeout=20000,
+            )
+
+            if response is None:
+                result = "The website did not return a response."
+            elif response.status >= 400:
+                result = f"Website returned HTTP {response.status}."
+            else:
+                title = page.title()
+                text = page.locator("body").inner_text(
+                    timeout=10000
+                )
+
+                result = (
+                    f"Website: {page.url}\n"
+                    f"Title: {title}\n\n"
+                    f"Content:\n{text[:10000]}"
+                )
+
+            browser.close()
+            return result
+
+    except Exception as e:
+        return f"Browser error: {type(e).__name__}: {e}"

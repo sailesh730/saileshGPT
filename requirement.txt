@@ -10,8 +10,10 @@ langgraph
 langgraph-checkpoint
 langgraph-checkpoint-sqlite
 langchain-google-genai
+langchain-ollama
 langchain-chroma
 langchain-tavily
+playwright
 sqlalchemy
 chromadb
 pypdf

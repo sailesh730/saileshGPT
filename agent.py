@@ -2,13 +2,14 @@ import os
 from dotenv import load_dotenv
 from pathlib import Path
 import certifi
+from langchain_ollama import ChatOllama
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import SystemMessage,AIMessage,HumanMessage
-from langgraph.graph import StateGraph,START,END,MessagesState,add_messages
-from langgraph.prebuilt import tool_node,tools_condition,ToolNode
+from langchain_core.messages import SystemMessage, HumanMessage,AIMessageChunk
+from langgraph.graph import StateGraph, START, MessagesState
+from langgraph.prebuilt import tools_condition, ToolNode
 from langgraph.checkpoint.sqlite import SqliteSaver
 import sqlite3
-from tools import wed_search, calculator, get_weather, recall_memory, rember_this, search_uploaded_document
+from tools import wed_search, calculator, get_weather, recall_memory, rember_this, search_uploaded_document,browser_read
 from model_config import DEFAULT_MODEL, LEGACY_MODEL_ALIASES, MODEL_IDS, MODEL_OPTIONS
 
 os.environ["SSL_CERT_FILE"] = certifi.where()
@@ -708,30 +709,47 @@ def normilize_model(model_name:str) -> str:
     return DEFFULT_MODEL
 
 
+TOOL_SYSTEM_PROMPT = """You are SaileshGPT, a helpful assistant. Answer straightforward questions directly.
+Use web search for current or online information, the calculator for arithmetic,
+weather lookup for current conditions, memory tools only when the user asks you
+to remember or recall something, and document search for questions about uploaded
+files. Use browser_read when the user asks you to open, visit, or read a specific
+public webpage or URL. Use web search for finding information across the web or
+for current information instead of browser_read. Call a tool when it is needed,
+then use its result to answer clearly.
+Never claim a tool was used unless you called it, and never invent tool results."""
 
 
 
 def build_agent(model_name : str):
     """
-    build on langgraph agent fir a selection gemini model
+    Build a LangGraph agent using the selected Ollama or Gemini model.
     """
     selected_model = normilize_model(model_name)
-    google_api_key = os.getenv("GOOGLE_API_KEY")
-    if not google_api_key:
-        raise RuntimeError(
-            "Missing GOOGLE_API_KEY. Add it to a .env file in the project root and restart the app."
+    if selected_model.startswith("gemini-"):
+        google_api_key = os.getenv("GOOGLE_API_KEY")
+        if not google_api_key:
+            raise RuntimeError(
+                "Missing GOOGLE_API_KEY. Add it to the project .env file to use Gemini."
+            )
+        llm = ChatGoogleGenerativeAI(
+            model=selected_model,
+            api_key=google_api_key,
+            temperature=0.8,
+            streaming=True,
+        )
+    else:
+        llm = ChatOllama(
+            model=selected_model,
+            temperature=0.8,
+            num_ctx=2048,
+            num_predict=128,
         )
 
-    llm = ChatGoogleGenerativeAI(
-        model= selected_model,
-        api_key=google_api_key,
-        temperature=0.8,
-        streaming=True
-    )
     llm_with_tool = llm.bind_tools(tools)
 
     def chat_node(state:MessagesState):
-        messages = state["messages"] + [SystemMessage(content=System_prompt)]
+        messages = [SystemMessage(content=TOOL_SYSTEM_PROMPT), *state["messages"]]
 
         response = llm_with_tool.invoke(messages)
         return {"messages":[response]}
@@ -745,7 +763,7 @@ def build_agent(model_name : str):
 
     graph.add_edge(START,"chat_node")
     graph.add_conditional_edges("chat_node",tools_condition)
-    graph.add_edge("tools",END)
+    graph.add_edge("tools","chat_node")
 
     connect = sqlite3.connect(
         "data/langgraph_checkpoints.sqlite",
@@ -762,6 +780,7 @@ tools = [
     recall_memory,
     search_uploaded_document,
     rember_this,
+    browser_read
 ]
 
 
@@ -838,5 +857,5 @@ def get_reply_chunks(message: str, thread_id: str, model_id: str):
                 raise
 
     raise RuntimeError(
-        "The selected Gemini model is temporarily unavailable. Please try again in a moment or switch to a different model."
+        "The local Ollama model is temporarily unavailable. Make sure Ollama is running and try again."
     ) from last_error

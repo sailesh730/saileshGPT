@@ -20,7 +20,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
-from langchain_core.messages import AIMessageChunk, HumanMessage
+from langchain_core.messages import AIMessageChunk, HumanMessage, ToolMessage
 
 from database import (
     SessionLocal,
@@ -33,7 +33,7 @@ from database import (
 )
 from model_config import DEFAULT_MODEL, MODEL_OPTIONS, MODEL_IDS
 
-logger = logging.getLogger("saileshgpt")
+logger = logging.getLogger("Saileshgpt")
 
 SESSION_COOKIE = "sailesh_session"
 SESSION_PATTERN = re.compile(r"[A-Za-z0-9_-]{40,50}")
@@ -188,6 +188,12 @@ async def prepare_chat_request(request: Request):
 
 
 def get_reply_chunks(message: str, thread_id: str, model_id: str):
+    for event in get_reply_events(message, thread_id, model_id):
+        if event["type"] == "delta":
+            yield event["text"]
+
+
+def get_reply_events(message: str, thread_id: str, model_id: str):
     from agent import get_agent, get_retry_model_candidates, is_retryable_model_error
 
     last_error = None
@@ -195,30 +201,55 @@ def get_reply_chunks(message: str, thread_id: str, model_id: str):
         try:
             agent = get_agent(candidate_model)
             config = {"configurable": {"thread_id": thread_id}}
+            started_tool_calls = set()
             for chunk, _ in agent.stream(
                 {"messages": [HumanMessage(content=message)]},
                 config=config,
                 stream_mode="messages",
             ):
-                # fixed: "messages" mode also emits ToolMessages and other node output;
-                # only the model's own tokens belong in the reply.
+                if isinstance(chunk, ToolMessage):
+                    tool_key = chunk.tool_call_id or f"name:{chunk.name}"
+                    started_tool_calls.discard(tool_key)
+                    yield {
+                        "type": "tool_complete",
+                        "tool": chunk.name,
+                        "tool_call_id": chunk.tool_call_id,
+                    }
+                    continue
+
                 if not isinstance(chunk, AIMessageChunk):
                     continue
+
+                # Tool-call chunks can arrive across several model tokens. The
+                # name is emitted once, when it becomes available.
+                calls = chunk.tool_call_chunks or chunk.tool_calls
+                for call in calls:
+                    name = call.get("name")
+                    if name:
+                        tool_key = call.get("id") or f"name:{name}"
+                        if tool_key in started_tool_calls:
+                            continue
+                        started_tool_calls.add(tool_key)
+                        yield {
+                            "type": "tool_start",
+                            "tool": name,
+                            "tool_call_id": call.get("id"),
+                        }
 
                 content = chunk.content
                 if isinstance(content, str):
                     if content:
-                        yield content
+                        yield {"type": "delta", "text": content}
                 elif isinstance(content, list):
                     for item in content:
                         if isinstance(item, str):
-                            yield item
+                            yield {"type": "delta", "text": item}
                         elif (
                             isinstance(item, dict)
                             and item.get("type", "text") == "text"
                             and isinstance(item.get("text"), str)
                         ):
-                            yield item["text"]
+                            yield {"type": "delta", "text": item["text"]}
             return
         except Exception as exc:
             last_error = exc
@@ -226,7 +257,7 @@ def get_reply_chunks(message: str, thread_id: str, model_id: str):
                 raise
 
     raise RuntimeError(
-        "The selected Gemini model is temporarily unavailable. Please try again in a moment or switch to a different model."
+        "The local Ollama model is temporarily unavailable. Make sure Ollama is running and try again."
     ) from last_error
 
 
@@ -289,9 +320,10 @@ async def chat_stream(request: Request):
     def event_stream():
         reply_parts = []
         try:
-            for text in get_reply_chunks(message, thread_id, model_id):
-                reply_parts.append(text)
-                yield sse({"type": "delta", "text": text})
+            for event in get_reply_events(message, thread_id, model_id):
+                if event["type"] == "delta":
+                    reply_parts.append(event["text"])
+                yield sse(event)
 
             reply = "".join(reply_parts).strip() or "I did not receive a response."
             title = save_chat_turn(session_id, thread_id, message, reply, is_new)
