@@ -189,9 +189,11 @@ def validate_url(url: str) -> bool:
         parsed = urlparse(url)
 
         if parsed.scheme not in ("http", "https"):
+            print("This is an not https or http URL")
             return False
 
         if not parsed.hostname or parsed.username or parsed.password:
+            print("plz login this wedsite before using so, i can acess")
             return False
 
         host = parsed.hostname.lower()
