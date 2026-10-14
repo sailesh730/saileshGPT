@@ -5,10 +5,29 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#0d0d10" />
   <title>SaileshGPT — AI workspace</title>
+  <script>
+    /* Apply the saved theme before first paint so there is no flash of the wrong theme. */
+    (function () {
+      var t = null;
+      try { t = localStorage.getItem('sailesh_theme'); } catch (e) {}
+      if (!t || !/^[a-z-]+$/.test(t)) {
+        t = window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'premium';
+      }
+      document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
   <style>
     * { box-sizing: border-box; }
-    /* Premium palette: obsidian with champagne gold. Dark by default, light follows the system. */
-    :root {
+
+    /* ==========================================================================
+       THEMES
+       Every theme sets the same variables. To add a theme:
+         1. Copy any [data-theme="..."] block below, rename it, change the colors.
+         2. Add { id, name } to the THEMES array in the script.
+       The preview swatches in the picker read these same variables.
+       Keep the premium block first; later blocks override it.
+       ========================================================================== */
+    :root, [data-theme="premium"] {
       color-scheme: dark;
       --bg: #0d0d10;
       --sidebar: #111114;
@@ -19,41 +38,131 @@
       --text: #efece6;
       --muted: #9a968c;
       --border: #2a2a31;
-      --blue: #d4b26a;
       --accent: #d4b26a;
       --accent-strong: #e6c887;
+      --accent-grad: #d4b26a;
+      --accent-grad-hover: #e6c887;
       --on-accent: #17120a;
       --pink: #f08a94;
       --success: #5fd0a0;
+      --warning: #e8b64f;
       --shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+      --glow: 0 0 0 0 transparent;
+      --bg-image: none;
+      --main-bg: var(--bg);
+      --panel-bg: var(--surface);
+      --blur: 0px;
+    }
+    [data-theme="advanced"] {
+      color-scheme: dark;
+      --bg: #0a1020; --sidebar: #0d1428; --surface: #121b33; --surface-hover: #1a2545;
+      --active: #14284f; --active-text: #cfe0ff; --text: #e8eefc; --muted: #8e9bbd; --border: #223056;
+      --accent: #4d9bff; --accent-strong: #7bb4ff; --accent-grad: #4d9bff; --accent-grad-hover: #7bb4ff; --on-accent: #04112b;
+      --pink: #ff7a8a; --success: #4ade9b; --warning: #f5b84a;
+      --shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+    }
+    [data-theme="light"] {
+      color-scheme: light;
+      --bg: #f7f8fa; --sidebar: #eef1f5; --surface: #ffffff; --surface-hover: #e6eaf0;
+      --active: #e3edff; --active-text: #12408f; --text: #1a2230; --muted: #5d6879; --border: #dde2ea;
+      --accent: #1f5fd1; --accent-strong: #174aa6; --accent-grad: #1f5fd1; --accent-grad-hover: #174aa6; --on-accent: #ffffff;
+      --pink: #c62e45; --success: #17835a; --warning: #a86300;
+      --shadow: 0 8px 28px rgba(26, 34, 48, 0.09);
+    }
+    [data-theme="midnight"] {
+      color-scheme: dark;
+      --bg: #07060c; --sidebar: #0b0912; --surface: #120f1c; --surface-hover: #1b1629;
+      --active: #261b44; --active-text: #e4d8ff; --text: #ece8f5; --muted: #9189a6; --border: #261f38;
+      --accent: #9b6cf5; --accent-strong: #b28cff; --accent-grad: #9b6cf5; --accent-grad-hover: #b28cff; --on-accent: #0e0720;
+      --pink: #f58aa6; --success: #5fd0a0; --warning: #e8b64f;
+      --shadow: 0 10px 34px rgba(0, 0, 0, 0.55);
+    }
+    [data-theme="ocean"] {
+      color-scheme: dark;
+      --bg: #08191d; --sidebar: #0a2026; --surface: #0f2a31; --surface-hover: #153640;
+      --active: #12404a; --active-text: #c8f5fb; --text: #e2f4f6; --muted: #84a9b0; --border: #1c3f48;
+      --accent: #22d3ee; --accent-strong: #67e3f5; --accent-grad: #22d3ee; --accent-grad-hover: #67e3f5; --on-accent: #03242b;
+      --pink: #ff8a94; --success: #5fe0b0; --warning: #f0c05a;
+      --shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+    }
+    [data-theme="cyberpunk"] {
+      color-scheme: dark;
+      --bg: #09060d; --sidebar: #0e0814; --surface: #150c1f; --surface-hover: #1f1130;
+      --active: #2e1240; --active-text: #ffd3f0; --text: #f4e9fb; --muted: #a28bb8; --border: #3a1f54;
+      --accent: #ff3fa4; --accent-strong: #ff74c1; --accent-grad: #ff3fa4; --accent-grad-hover: #ff74c1; --on-accent: #1a0412;
+      --pink: #ff7a45; --success: #3de8a8; --warning: #ffd23f;
+      --shadow: 0 10px 34px rgba(0, 0, 0, 0.55);
+      --glow: 0 0 18px rgba(255, 63, 164, 0.28);
+    }
+    [data-theme="glass"] {
+      color-scheme: dark;
+      --bg: #0b1020;
+      --sidebar: rgba(255, 255, 255, 0.06);
+      --surface: rgba(255, 255, 255, 0.08);
+      --surface-hover: rgba(255, 255, 255, 0.14);
+      --active: rgba(140, 150, 255, 0.22); --active-text: #eef0ff;
+      --text: #f2f4ff; --muted: #a9b0cc; --border: rgba(255, 255, 255, 0.16);
+      --accent: #8fa2ff; --accent-strong: #aab8ff; --accent-grad: #8fa2ff; --accent-grad-hover: #aab8ff; --on-accent: #0a1030;
+      --pink: #ff8a9a; --success: #5fe0b0; --warning: #f5c35a;
+      --shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
+      --bg-image:
+        radial-gradient(60% 50% at 15% 10%, rgba(124, 92, 255, 0.45), transparent 60%),
+        radial-gradient(50% 45% at 90% 20%, rgba(0, 200, 255, 0.35), transparent 60%),
+        radial-gradient(55% 50% at 60% 100%, rgba(255, 90, 170, 0.30), transparent 60%);
+      --main-bg: transparent;
+      --panel-bg: rgba(20, 24, 48, 0.86);
+      --blur: 18px;
+    }
+    [data-theme="minimal"] {
+      color-scheme: light;
+      --bg: #fafafa; --sidebar: #f4f4f5; --surface: #ffffff; --surface-hover: #ececed;
+      --active: #ececed; --active-text: #18181b; --text: #18181b; --muted: #71717a; --border: #e4e4e7;
+      --accent: #27272a; --accent-strong: #000000; --accent-grad: #27272a; --accent-grad-hover: #000000; --on-accent: #ffffff;
+      --pink: #b42318; --success: #15803d; --warning: #a16207;
+      --shadow: none;
+    }
+    [data-theme="emerald"] {
+      color-scheme: dark;
+      --bg: #07130e; --sidebar: #0a1a13; --surface: #0f241b; --surface-hover: #153227;
+      --active: #12402d; --active-text: #c9f5de; --text: #e3f3ea; --muted: #86a898; --border: #1b3b2d;
+      --accent: #34d399; --accent-strong: #6ee7b7; --accent-grad: #34d399; --accent-grad-hover: #6ee7b7; --on-accent: #032416;
+      --pink: #ff8a94; --success: #6ee7b7; --warning: #f0c05a;
+      --shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+    }
+    [data-theme="sunset"] {
+      color-scheme: dark;
+      --bg: #140c14; --sidebar: #1a0f1a; --surface: #221422; --surface-hover: #2e1c2e;
+      --active: #3b1f35; --active-text: #ffe0cf; --text: #f7ebe6; --muted: #b39a9f; --border: #3a2536;
+      --accent: #ff8a5c; --accent-strong: #ffa985;
+      --accent-grad: linear-gradient(135deg, #ff8a5c, #ff5f8a 58%, #a86bff);
+      --accent-grad-hover: linear-gradient(135deg, #ffa985, #ff7fa3 58%, #bb8aff);
+      --on-accent: #2a0e05;
+      --pink: #ff5470; --success: #5fd0a0; --warning: #ffc15a;
+      --shadow: 0 10px 34px rgba(0, 0, 0, 0.45);
+      --bg-image: radial-gradient(55% 45% at 95% 0%, rgba(168, 107, 255, 0.18), transparent 60%);
+    }
+
+    /* Convenience aliases */
+    :root {
+      --blue: var(--accent);
       --gemini: var(--accent);
+      --bg-primary: var(--bg);
+      --bg-secondary: var(--sidebar);
+      --card-bg: var(--surface);
+      --text-primary: var(--text);
+      --text-muted: var(--muted);
+      --accent-primary: var(--accent);
+      --border-color: var(--border);
+      --error: var(--pink);
     }
-    @media (prefers-color-scheme: light) {
-      :root {
-        color-scheme: light;
-        --bg: #faf9f6;
-        --sidebar: #f2efe9;
-        --surface: #ffffff;
-        --surface-hover: #ebe7de;
-        --active: #f3e8cc;
-        --active-text: #5c4513;
-        --text: #1c1b19;
-        --muted: #6d685d;
-        --border: #e3ded2;
-        --blue: #9a7424;
-        --accent: #9a7424;
-        --accent-strong: #7f5f1a;
-        --on-accent: #ffffff;
-        --pink: #d6455a;
-        --success: #1f9d6b;
-        --shadow: 0 8px 28px rgba(28, 27, 25, 0.08);
-      }
-    }
+
     html, body {
       margin: 0;
       height: 100%;
       font-family: Inter, "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", sans-serif;
-      background: var(--bg);
+      background-color: var(--bg);
+      background-image: var(--bg-image);
+      background-attachment: fixed;
       color: var(--text);
       -webkit-font-smoothing: antialiased;
     }
@@ -69,6 +178,10 @@
       stroke: currentColor; fill: none;
       stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
     }
+    /* Smooth theme change: only active for a moment while switching */
+    .theme-anim, .theme-anim * {
+      transition: background-color 0.25s ease, color 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease !important;
+    }
     .app { display: flex; width: 100%; height: 100%; position: relative; }
     /* Sidebar */
     .sidebar {
@@ -77,6 +190,7 @@
       display: flex; flex-direction: column; gap: 14px;
       background: var(--sidebar);
       border-right: 1px solid var(--border);
+      -webkit-backdrop-filter: blur(var(--blur)); backdrop-filter: blur(var(--blur));
     }
     .brand {
       display: flex; align-items: center; gap: 10px;
@@ -86,7 +200,8 @@
     .brand-mark {
       width: 30px; height: 30px; border-radius: 9px;
       display: grid; place-items: center;
-      background: var(--accent); color: var(--on-accent);
+      background: var(--accent-grad); color: var(--on-accent);
+      box-shadow: var(--glow);
       font-size: 0.7rem; font-weight: 700; letter-spacing: 0.02em;
     }
     .new-chat-btn {
@@ -138,7 +253,7 @@
     }
     .sidebar-card p { margin: 0; color: var(--muted); font-size: 0.78rem; line-height: 1.5; }
     /* Main */
-    .main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
+    .main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--main-bg); }
     .topbar {
       min-height: 60px; padding: 0 24px;
       display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -170,12 +285,76 @@
     }
     .model-select:hover { background-color: var(--surface-hover); }
     .model-select:disabled { cursor: wait; opacity: 0.65; }
-    .model-select option { background: var(--sidebar); color: var(--text); }
+    .model-select option { background: var(--bg); color: var(--text); }
     .pill {
       padding: 6px 12px; border-radius: 10px;
       border: 1px solid var(--border);
       color: var(--muted); font-size: 0.76rem;
     }
+
+    /* Theme picker */
+    .theme-wrap { position: relative; }
+    .theme-btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      height: 34px; padding: 0 12px;
+      border: 1px solid var(--border); border-radius: 10px;
+      background: var(--surface); color: var(--text);
+      font-size: 0.82rem; cursor: pointer;
+    }
+    .theme-btn:hover, .theme-btn[aria-expanded="true"] { background: var(--surface-hover); }
+    .theme-btn .icon { width: 17px; height: 17px; color: var(--accent); }
+    .theme-panel {
+      position: absolute; right: 0; top: calc(100% + 10px); z-index: 20;
+      width: min(420px, calc(100vw - 24px));
+      padding: 14px; border-radius: 16px;
+      background: var(--panel-bg); border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+      -webkit-backdrop-filter: blur(var(--blur)); backdrop-filter: blur(var(--blur));
+    }
+    .theme-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 2px 10px; }
+    .theme-head strong { font-size: 0.92rem; font-weight: 600; }
+    .theme-hint { display: none; color: var(--muted); font-size: 0.76rem; }
+    @media (hover: hover) { .theme-hint { display: inline; } }
+    .theme-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .theme-option {
+      position: relative; display: flex; flex-direction: column; gap: 8px;
+      padding: 8px; border: 1px solid var(--border); border-radius: 12px;
+      background: transparent; color: var(--text);
+      font-size: 0.82rem; font-weight: 500; text-align: left; cursor: pointer;
+      transition: background 150ms ease, border-color 150ms ease;
+    }
+    .theme-option:hover { background: var(--surface-hover); }
+    .theme-option[aria-checked="true"] { border-color: var(--accent); background: var(--active); color: var(--active-text); }
+    .theme-name { padding: 0 2px 2px; }
+    .theme-preview {
+      display: flex; height: 42px; border-radius: 8px; overflow: hidden;
+      border: 1px solid var(--border);
+      background-color: var(--bg); background-image: var(--bg-image);
+    }
+    .pv-side { width: 22%; background: var(--sidebar); border-right: 1px solid var(--border); }
+    .pv-body { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 4px; padding: 6px 8px; }
+    .pv-user { align-self: flex-end; width: 45%; height: 7px; border-radius: 4px; background: var(--active); border: 1px solid var(--border); }
+    .pv-bot { width: 62%; height: 6px; border-radius: 4px; background: var(--muted); opacity: 0.55; }
+    .pv-acc { width: 30%; height: 7px; border-radius: 4px; background: var(--accent-grad); }
+    .theme-check {
+      position: absolute; top: 14px; right: 14px;
+      width: 18px; height: 18px; border-radius: 50%;
+      display: grid; place-items: center;
+      background: var(--accent); color: var(--on-accent);
+      opacity: 0; transform: scale(0.8); transition: opacity 150ms ease, transform 150ms ease;
+    }
+    .theme-check svg { width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+    .theme-option[aria-checked="true"] .theme-check { opacity: 1; transform: scale(1); }
+    .theme-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; padding: 0 2px; }
+    .theme-note { color: var(--muted); font-size: 0.76rem; }
+    .theme-reset {
+      height: 32px; padding: 0 12px;
+      border: 1px solid var(--border); border-radius: 10px;
+      background: transparent; color: var(--text);
+      font-size: 0.8rem; cursor: pointer;
+    }
+    .theme-reset:hover { background: var(--surface-hover); }
+
     .chat-area {
       flex: 1; overflow-y: auto;
       padding: 28px clamp(16px, 6vw, 96px) 24px;
@@ -216,7 +395,7 @@
       border-radius: 50%; background: var(--accent);
     }
     .tool-call.complete .tool-call-indicator { background: var(--success); }
-    .tool-call.failed .tool-call-indicator { background: var(--pink); }
+    .tool-call.failed .tool-call-indicator { background: var(--error); }
     .tool-call.complete { color: var(--text); }
     .tool-call-status { color: var(--muted); }
     .bubble.typing::after {
@@ -232,6 +411,7 @@
       padding: 11px 16px;
       border-radius: 16px 16px 4px 16px;
       background: var(--active); color: var(--active-text);
+      border: 1px solid var(--border);
     }
     .composer { padding: 8px clamp(16px, 6vw, 96px) 24px; }
     .composer-box {
@@ -241,9 +421,10 @@
       border-radius: 20px; background: var(--surface);
       border: 1px solid var(--border);
       box-shadow: var(--shadow);
-      transition: border-color 160ms ease;
+      -webkit-backdrop-filter: blur(var(--blur)); backdrop-filter: blur(var(--blur));
+      transition: border-color 160ms ease, box-shadow 160ms ease;
     }
-    .composer-box:focus-within { border-color: var(--accent); }
+    .composer-box:focus-within { border-color: var(--accent); box-shadow: var(--shadow), var(--glow); }
     textarea {
       flex: 1; min-height: 44px; max-height: 180px;
       padding: 11px 8px; resize: none;
@@ -263,19 +444,19 @@
     .action-btn:hover { background: var(--surface-hover); color: var(--text); }
     .send-btn {
       height: 42px; gap: 8px; padding: 0 18px;
-      border-radius: 12px; background: var(--accent); color: var(--on-accent);
+      border-radius: 12px; background: var(--accent-grad); color: var(--on-accent);
       font-size: 0.88rem;
     }
-    .send-btn:hover { background: var(--accent-strong); }
+    .send-btn:hover { background: var(--accent-grad-hover); }
     button:disabled { cursor: not-allowed; opacity: 0.5; }
     .mic-listening {
-      background: rgba(240, 138, 148, 0.16); color: var(--pink);
+      background: color-mix(in srgb, var(--error) 18%, transparent); color: var(--error);
       animation: pulse 1.2s infinite;
     }
     @keyframes pulse {
-      0% { box-shadow: 0 0 0 0 rgba(240, 138, 148, 0.4); }
-      70% { box-shadow: 0 0 0 10px rgba(240, 138, 148, 0); }
-      100% { box-shadow: 0 0 0 0 rgba(240, 138, 148, 0); }
+      0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--error) 45%, transparent); }
+      70% { box-shadow: 0 0 0 10px transparent; }
+      100% { box-shadow: 0 0 0 0 transparent; }
     }
     @media (max-width: 760px) {
       .app { height: 100dvh; }
@@ -293,7 +474,17 @@
       .history-toggle { display: inline-flex; }
       .topbar { min-height: 56px; padding: 0 12px; }
       .pill { display: none; }
+      .model-select { max-width: 150px; }
       .composer { padding: 8px 12px max(16px, env(safe-area-inset-bottom)); }
+      /* Theme panel becomes a full-width sheet under the top bar */
+      .theme-panel {
+        position: fixed; left: 12px; right: 12px; top: 62px; width: auto;
+        max-height: calc(100dvh - 80px); overflow-y: auto;
+      }
+    }
+    @media (max-width: 520px) {
+      .theme-btn { width: 38px; padding: 0; justify-content: center; }
+      .theme-btn-label { display: none; }
     }
     @media (max-width: 420px) {
       .send-btn { width: 42px; padding: 0; font-size: 0; }
@@ -344,6 +535,23 @@
           <select class="model-select" id="modelSelect" aria-label="Select AI model" title="Select AI model" disabled>
             <option>Loading models…</option>
           </select>
+          <div class="theme-wrap" id="themeWrap">
+            <button class="theme-btn" id="themeBtn" type="button" aria-label="Change theme" title="Change theme" aria-haspopup="dialog" aria-expanded="false" aria-controls="themePanel">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.8 1.8-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-1 .8-1.7 1.8-1.7H16a5 5 0 0 0 5-5c0-4-4-7.2-9-7.2Z" /><circle cx="7.5" cy="11" r=".6" /><circle cx="10" cy="7.5" r=".6" /><circle cx="14.5" cy="7.5" r=".6" /></svg>
+              <span class="theme-btn-label">Theme</span>
+            </button>
+            <div class="theme-panel hidden" id="themePanel" role="dialog" aria-label="Choose a theme">
+              <div class="theme-head">
+                <strong>Theme</strong>
+                <span class="theme-hint">Hover to preview</span>
+              </div>
+              <div class="theme-grid" id="themeGrid" role="radiogroup" aria-label="Themes"></div>
+              <div class="theme-foot">
+                <span class="theme-note">Saved in this browser</span>
+                <button class="theme-reset" id="themeReset" type="button">Reset to default</button>
+              </div>
+            </div>
+          </div>
           <span class="pill">Qwen + Gemini</span>
         </div>
       </header>
@@ -389,6 +597,154 @@
     let isListening = false;
     let activeThreadId = null;
     let selectedModelId = '';
+
+    /* ---------- Theme system (presentation only) ---------- */
+    // To add a theme: add an entry here and a matching [data-theme="id"] block in the CSS.
+    const THEMES = [
+      { id: 'premium', name: 'Premium Dark' },
+      { id: 'advanced', name: 'Advanced Dark' },
+      { id: 'light', name: 'Light Professional' },
+      { id: 'midnight', name: 'Midnight' },
+      { id: 'ocean', name: 'Ocean' },
+      { id: 'cyberpunk', name: 'Cyberpunk' },
+      { id: 'glass', name: 'Glassmorphism' },
+      { id: 'minimal', name: 'Minimal' },
+      { id: 'emerald', name: 'Emerald' },
+      { id: 'sunset', name: 'Sunset' }
+    ];
+    const THEME_KEY = 'sailesh_theme';
+    const themeRoot = document.documentElement;
+    const themeMeta = document.querySelector('meta[name="theme-color"]');
+    const themeWrap = document.getElementById('themeWrap');
+    const themeBtn = document.getElementById('themeBtn');
+    const themePanel = document.getElementById('themePanel');
+    const themeGrid = document.getElementById('themeGrid');
+    const themeReset = document.getElementById('themeReset');
+    let animTimer = 0;
+    let currentTheme = 'premium';
+
+    function defaultTheme() {
+      return window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'premium';
+    }
+    function readSavedTheme() {
+      try {
+        const saved = localStorage.getItem(THEME_KEY);
+        return THEMES.some((theme) => theme.id === saved) ? saved : null;
+      } catch (error) {
+        console.warn('Could not read the saved theme.', error);
+        return null;
+      }
+    }
+    function paintTheme(id) {
+      themeRoot.classList.add('theme-anim');
+      clearTimeout(animTimer);
+      animTimer = setTimeout(() => themeRoot.classList.remove('theme-anim'), 350);
+      themeRoot.setAttribute('data-theme', id);
+      const bg = getComputedStyle(themeRoot).getPropertyValue('--bg').trim();
+      if (themeMeta && bg) themeMeta.setAttribute('content', bg);
+    }
+    function updateThemeChecks() {
+      themeGrid.querySelectorAll('.theme-option').forEach((option) => {
+        option.setAttribute('aria-checked', String(option.dataset.themeId === currentTheme));
+        option.tabIndex = option.dataset.themeId === currentTheme ? 0 : -1;
+      });
+    }
+    function setTheme(id, save) {
+      currentTheme = id;
+      paintTheme(id);
+      updateThemeChecks();
+      if (save) {
+        try {
+          localStorage.setItem(THEME_KEY, id);
+        } catch (error) {
+          console.warn('Could not save the theme preference.', error);
+        }
+      }
+    }
+    function resetTheme() {
+      try {
+        localStorage.removeItem(THEME_KEY);
+      } catch (error) {
+        console.warn('Could not clear the theme preference.', error);
+      }
+      setTheme(defaultTheme(), false);
+    }
+    function buildThemePicker() {
+      THEMES.forEach((theme) => {
+        const option = document.createElement('button');
+        option.type = 'button';
+        option.className = 'theme-option';
+        option.dataset.themeId = theme.id;
+        option.setAttribute('role', 'radio');
+        option.setAttribute('aria-checked', 'false');
+        // The preview carries its own data-theme, so it shows that theme's real colors.
+        const preview = document.createElement('span');
+        preview.className = 'theme-preview';
+        preview.setAttribute('data-theme', theme.id);
+        preview.setAttribute('aria-hidden', 'true');
+        preview.innerHTML = '<span class="pv-side"></span><span class="pv-body"><span class="pv-user"></span><span class="pv-bot"></span><span class="pv-acc"></span></span>';
+        const name = document.createElement('span');
+        name.className = 'theme-name';
+        name.textContent = theme.name;
+        const check = document.createElement('span');
+        check.className = 'theme-check';
+        check.setAttribute('aria-hidden', 'true');
+        check.innerHTML = '<svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>';
+        option.append(preview, name, check);
+        option.addEventListener('click', () => setTheme(theme.id, true));
+        option.addEventListener('pointerenter', (event) => {
+          if (event.pointerType === 'mouse') paintTheme(theme.id);
+        });
+        option.addEventListener('focus', () => {
+          if (option.matches(':focus-visible')) paintTheme(theme.id);
+        });
+        option.addEventListener('blur', () => paintTheme(currentTheme));
+        themeGrid.appendChild(option);
+      });
+      updateThemeChecks();
+    }
+    function openThemePanel() {
+      themePanel.classList.remove('hidden');
+      themeBtn.setAttribute('aria-expanded', 'true');
+      const active = themeGrid.querySelector('.theme-option[aria-checked="true"]');
+      if (active) active.focus({ preventScroll: true });
+    }
+    function closeThemePanel(returnFocus) {
+      if (themePanel.classList.contains('hidden')) return;
+      themePanel.classList.add('hidden');
+      themeBtn.setAttribute('aria-expanded', 'false');
+      paintTheme(currentTheme);
+      if (returnFocus) themeBtn.focus();
+    }
+    themeBtn.addEventListener('click', () => {
+      if (themePanel.classList.contains('hidden')) openThemePanel();
+      else closeThemePanel(false);
+    });
+    themeReset.addEventListener('click', resetTheme);
+    themePanel.addEventListener('pointerleave', (event) => {
+      if (event.pointerType === 'mouse') paintTheme(currentTheme);
+    });
+    themeGrid.addEventListener('keydown', (event) => {
+      const keys = ['ArrowRight', 'ArrowLeft', 'ArrowDown', 'ArrowUp'];
+      if (!keys.includes(event.key)) return;
+      const options = Array.from(themeGrid.querySelectorAll('.theme-option'));
+      const index = options.indexOf(document.activeElement);
+      if (index === -1) return;
+      event.preventDefault();
+      const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowDown' ? 2 : -2;
+      const next = options[(index + step + options.length) % options.length];
+      next.focus();
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') closeThemePanel(true);
+    });
+    document.addEventListener('click', (event) => {
+      if (!themeWrap.contains(event.target)) closeThemePanel(false);
+    });
+    buildThemePicker();
+    setTheme(readSavedTheme() || defaultTheme(), false);
+
+    /* ---------- Existing application code (unchanged) ---------- */
     function showWelcomeMessage() {
       chatArea.replaceChildren();
       addMessage('Hello! I’m your assistant. Ask me anything, and I’ll help with ideas, answers, and content.', 'bot');
