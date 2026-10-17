@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from langchain_core.tools import tool
 from langchain_core.runnables import RunnableConfig
 from langchain_tavily import TavilySearch
-from database import save_memory,get_chat_history
+from database import SessionLocal, save_memory, get_memories
 load_dotenv()
 from rag import retrive_from_rag
 from urllib.parse import urlparse
@@ -52,22 +52,38 @@ def calculator(expression:str)-> str:
         return f"caclutation error :{str(e)}"
 
 
-@tool 
-def rember_this(memory:str)->str:
-    """save an importent user performence or fact into lang-trm memory 
-    used this whem the user ask toyou to rember something"""
-    return save_memory (
-        thred_id_set=CUREENT_THRED_ID,
-        memory=memory
-    )
-@tool 
-def recall_memory(query:str)->str:
-    """recall save long term memories about the user or this conversation
-    """
-    return get_chat_history(
-        thread_id=CUREENT_THRED_ID,
-        query=query
-    )
+@tool
+def rember_this(memory: str) -> str:
+    """Save an important user fact or preference into long-term memory."""
+    db = SessionLocal()
+    try:
+        item = save_memory(db, user_id=CUREENT_THRED_ID, memory=memory, memory_type="note")
+        return f"Saved memory: {item.memory}"
+    finally:
+        db.close()
+
+
+@tool
+def recall_memory(query: str) -> str:
+    """Recall saved long-term memories relevant to the current conversation."""
+    db = SessionLocal()
+    try:
+        memories = get_memories(db, user_id=CUREENT_THRED_ID)
+        if not memories:
+            return "No saved memories found for this session."
+
+        matching = []
+        q = (query or "").lower()
+        for item in memories:
+            text = item.memory.lower()
+            if q in text or any(word in text for word in q.split() if word):
+                matching.append(item.memory)
+
+        if not matching:
+            return "No saved memories match that query."
+        return "\n\n".join(f"- {m}" for m in matching)
+    finally:
+        db.close()
 
 
 # weather_tool.py

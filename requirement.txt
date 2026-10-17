@@ -18,3 +18,9 @@ sqlalchemy
 chromadb
 pypdf
 python-docx
+uvicorn
+pycountry
+airportdata
+langchain-checkpoint-postgress
+psycopg_pool
+jinja2

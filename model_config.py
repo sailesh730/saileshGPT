@@ -4,6 +4,7 @@ MODEL_OPTIONS = (
     ("gemini-2.5-flash-lite", "Gemini 2.5 Flash-Lite (Free tier)"),
     ("gemini-2.5-pro", "Gemini 2.5 Pro"),
     ("gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite"),
+    ("gemini-3.8-flash","Gemini 3.8 Flash")
 )
 
 MODEL_IDS = frozenset(model_id for model_id, _ in MODEL_OPTIONS)
