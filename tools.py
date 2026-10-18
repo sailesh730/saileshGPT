@@ -1,84 +1,176 @@
+"""
+tools.py - all LangChain tools for the agentic chatbot.
+
+Sections:
+  1. General tools   (calculator, web search, memory, weather, documents, browser)
+  2. Travel tools    (countries, airports, flights, forecast, currency, budget)
+  3. Agent builder   (build_agent)
+
+.env keys used:
+    GOOGLE_API_KEY          (Gemini models)
+    TAVILY_API_KEY          (web search, optional)
+    OPENWEATHER_API_KEY     (get_weather, optional)
+    AVIATIONSTACK_API_KEY   (flight/airport/airline tools, optional)
+    TRAVEL_AGENT_MODEL      (optional, default: gemini-2.5-flash)
+
+Free APIs used without a key: REST Countries, Open-Meteo, open.er-api.com.
+"""
+
+import ast
 import math
+import operator
 import os
+import socket
+from datetime import datetime
+from ipaddress import ip_address
+from typing import Any, Optional
+from urllib.parse import urlparse
+
 import requests
 from dotenv import load_dotenv
-from langchain_core.tools import tool
 from langchain_core.runnables import RunnableConfig
-from langchain_tavily import TavilySearch
-from database import SessionLocal, save_memory, get_memories
+from langchain_core.tools import tool
+
 load_dotenv()
-from rag import retrive_from_rag
-from urllib.parse import urlparse
-from ipaddress import ip_address
 
-from playwright.sync_api import sync_playwright
+from database import SessionLocal, get_memories, save_memory  # noqa: E402
+from rag import retrive_from_rag  # noqa: E402
 
-# like a chatpt 
+TIMEOUT = 15
 
-
-CUREENT_THRED_ID = "defults"
-
-def thred_id_set(thread_id:str):
-    global CUREENT_THRED_ID
-    CUREENT_THRED_ID = thread_id
+# ==========================================================================
+# Thread id handling
+# ==========================================================================
+_current_thread_id = "default"
 
 
-
-wed_search = TavilySearch(
-    max_results=5,
-    topic="general",
-    search_depth="basic"
-)
+def set_thread_id(thread_id: str) -> None:
+    """Fallback thread id, used when a tool is called without a RunnableConfig."""
+    global _current_thread_id
+    _current_thread_id = thread_id
 
 
-@tool 
-def calculator(expression:str)-> str:
-    """usedful fro simple mah calcualtion 
-    input should be a valid math expression
-    expample 10+10 = 20 mean of 4354 math.sqrt(160) 1314131*311"""
+def _thread_id(config: Optional[RunnableConfig]) -> str:
+    return ((config or {}).get("configurable") or {}).get("thread_id") or _current_thread_id
 
+
+# ==========================================================================
+# 1. GENERAL TOOLS
+# ==========================================================================
+
+# --- Web search (created only if the key exists, so a missing key can't crash startup)
+web_search = None
+if os.getenv("TAVILY_API_KEY"):
     try:
-        allowed={
-            "math":math,
-            "abs":abs,
-            "round":round,
-            "min":min,
-            "max":max,
-            "sun":sum
-        }
-        result = eval(expression,{"__builtins__":{}},allowed)
-        return str(result)
-    except Exception as e:
-        return f"caclutation error :{str(e)}"
+        from langchain_tavily import TavilySearch
+
+        web_search = TavilySearch(max_results=5, topic="general", search_depth="basic")
+    except Exception as e:  # package missing or bad config
+        print(f"[tools] Web search disabled: {e}")
+
+
+# --- Calculator (safe: no eval) ------------------------------------------
+_BIN_OPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
+}
+_UNARY_OPS = {ast.UAdd: operator.pos, ast.USub: operator.neg}
+_MATH_FUNCS = {
+    name: getattr(math, name)
+    for name in ("sqrt", "sin", "cos", "tan", "log", "log10", "exp", "floor", "ceil", "factorial")
+}
+_FUNCS = {"abs": abs, "round": round, "min": min, "max": max, "sum": sum, **_MATH_FUNCS}
+_CONSTS = {"pi": math.pi, "e": math.e}
+
+
+def _calc(node: ast.AST):
+    if isinstance(node, ast.Expression):
+        return _calc(node.body)
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return node.value
+    if isinstance(node, ast.Name) and node.id in _CONSTS:
+        return _CONSTS[node.id]
+    if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "math":
+        if node.attr in _CONSTS:
+            return _CONSTS[node.attr]
+    if isinstance(node, (ast.List, ast.Tuple)):
+        return [_calc(x) for x in node.elts]
+    if isinstance(node, ast.UnaryOp) and type(node.op) in _UNARY_OPS:
+        return _UNARY_OPS[type(node.op)](_calc(node.operand))
+    if isinstance(node, ast.BinOp) and type(node.op) in _BIN_OPS:
+        left, right = _calc(node.left), _calc(node.right)
+        if isinstance(node.op, ast.Pow) and abs(right) > 1000:
+            raise ValueError("Exponent too large")
+        return _BIN_OPS[type(node.op)](left, right)
+    if isinstance(node, ast.Call) and not node.keywords:
+        func = node.func
+        if isinstance(func, ast.Name) and func.id in _FUNCS:
+            fn = _FUNCS[func.id]
+        elif (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "math"
+            and func.attr in _MATH_FUNCS
+        ):
+            fn = _MATH_FUNCS[func.attr]
+        else:
+            raise ValueError("Function not allowed")
+        args = [_calc(a) for a in node.args]
+        if fn is math.factorial and args and args[0] > 500:
+            raise ValueError("Number too large for factorial")
+        return fn(*args)
+    raise ValueError("Unsupported expression")
 
 
 @tool
-def rember_this(memory: str) -> str:
+def calculator(expression: str) -> str:
+    """Evaluate a math expression. Supports + - * / // % **, parentheses, abs, round,
+    min, max, sum, pi, e, and math functions (sqrt, sin, cos, tan, log, log10, exp,
+    floor, ceil, factorial).
+    Examples: '10+10', 'math.sqrt(160)', '1314131*311', 'round(22/7, 3)'.
+    """
+    try:
+        tree = ast.parse(expression.strip(), mode="eval")
+        return str(_calc(tree))
+    except ZeroDivisionError:
+        return "Calculation error: division by zero"
+    except Exception as e:
+        return f"Calculation error: {e}"
+
+
+# --- Long-term memory -----------------------------------------------------
+@tool
+def remember_this(memory: str, config: RunnableConfig) -> str:
     """Save an important user fact or preference into long-term memory."""
     db = SessionLocal()
     try:
-        item = save_memory(db, user_id=CUREENT_THRED_ID, memory=memory, memory_type="note")
+        item = save_memory(db, user_id=_thread_id(config), memory=memory, memory_type="note")
         return f"Saved memory: {item.memory}"
     finally:
         db.close()
 
 
 @tool
-def recall_memory(query: str) -> str:
+def recall_memory(query: str, config: RunnableConfig) -> str:
     """Recall saved long-term memories relevant to the current conversation."""
     db = SessionLocal()
     try:
-        memories = get_memories(db, user_id=CUREENT_THRED_ID)
+        memories = get_memories(db, user_id=_thread_id(config))
         if not memories:
             return "No saved memories found for this session."
 
-        matching = []
-        q = (query or "").lower()
-        for item in memories:
-            text = item.memory.lower()
-            if q in text or any(word in text for word in q.split() if word):
-                matching.append(item.memory)
-
+        q = (query or "").lower().strip()
+        words = q.split()
+        matching = [
+            item.memory
+            for item in memories
+            if q in item.memory.lower() or any(w in item.memory.lower() for w in words)
+        ]
         if not matching:
             return "No saved memories match that query."
         return "\n\n".join(f"- {m}" for m in matching)
@@ -86,147 +178,87 @@ def recall_memory(query: str) -> str:
         db.close()
 
 
-# weather_tool.py
-
-
-
-
-
-
-
-
-OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
-
-URL = "https://api.openweathermap.org/data/2.5/weather"
+# --- Weather (OpenWeather, current conditions) ----------------------------
+OPENWEATHER_URL = "https://api.openweathermap.org/data/2.5/weather"
 
 
 @tool
 def get_weather(city: str) -> dict:
+    """Get the current weather for a city: temperature, feels-like, humidity,
+    pressure, visibility, wind speed, description, city and country.
+    Use when the user asks about current weather or conditions.
     """
-    Get the current weather for a city.
-
-    Returns:
-    - Temperature
-    - Feels-like temperature
-    - Humidity
-    - Atmospheric pressure
-    - Visibility
-    - Wind speed
-    - Weather description
-    - City and country
-
-    Use this tool when the user asks about current weather,
-    temperature, humidity, pressure, visibility, wind,
-    or weather conditions.
-    """
-
-    if not OPENWEATHER_API_KEY:
-        return {
-            "success": False,
-            "error": "OPENWEATHER_API_KEY is not configured."
-        }
-
-    params = {
-        "q": city,
-        "appid": OPENWEATHER_API_KEY,
-        "units": "metric",
-    }
+    api_key = os.getenv("OPENWEATHER_API_KEY")
+    if not api_key:
+        return {"success": False, "error": "OPENWEATHER_API_KEY is not configured."}
 
     try:
         response = requests.get(
-            URL,
-            params=params,
+            OPENWEATHER_URL,
+            params={"q": city, "appid": api_key, "units": "metric"},
             timeout=10,
         )
-
         response.raise_for_status()
-
         data = response.json()
-
         return {
             "success": True,
             "city": data.get("name"),
-            "country": data.get("sys", {}).get("country"),
-
-            "temperature_c": data.get("main", {}).get("temp"),
-            "feels_like_c": data.get("main", {}).get("feels_like"),
-
-            "humidity_percent": data.get("main", {}).get("humidity"),
-            "pressure_hpa": data.get("main", {}).get("pressure"),
-
+            "country": (data.get("sys") or {}).get("country"),
+            "temperature_c": (data.get("main") or {}).get("temp"),
+            "feels_like_c": (data.get("main") or {}).get("feels_like"),
+            "humidity_percent": (data.get("main") or {}).get("humidity"),
+            "pressure_hpa": (data.get("main") or {}).get("pressure"),
             "visibility_meters": data.get("visibility"),
-
-            "wind_speed_mps": data.get("wind", {}).get("speed"),
-
-            "weather": data.get("weather", [{}])[0].get("description"),
-
+            "wind_speed_mps": (data.get("wind") or {}).get("speed"),
+            "weather": ((data.get("weather") or [{}])[0]).get("description"),
         }
-
     except requests.exceptions.HTTPError as e:
-
-        return {
-            "success": False,
-            "error": f"OpenWeather API error: {e}"
-        }
-
+        return {"success": False, "error": f"OpenWeather API error: {e}"}
     except requests.exceptions.RequestException as e:
-
-        return {
-            "success": False,
-            "error": f"Network error: {e}"
-        }
-
+        return {"success": False, "error": f"Network error: {e}"}
     except Exception as e:
+        return {"success": False, "error": f"Unexpected error: {e}"}
 
-        return {
-            "success": False,
-            "error": f"Unexpected error: {e}"
-        }
+
+# --- Uploaded documents (RAG) ---------------------------------------------
 @tool
-def search_uploaded_document(query:str, config:RunnableConfig) -> str:
+def search_uploaded_document(query: str, config: RunnableConfig) -> str:
+    """Search the user's uploaded documents (PDF, DOCX, TXT, MD, CSV, notes, files)
+    for relevant information. Use this when the user asks about an uploaded file.
     """
-    search oploaded documenet for relevent information 
-    used this when the user ske about opoaed pdf,dock ,txt ,notes,files , or documenet"""
-    thread_id = config.get("configurable", {}).get("thread_id", CUREENT_THRED_ID)
-    return retrive_from_rag(
-        query= query,
-        thread_id = thread_id
-    )
+    return retrive_from_rag(query=query, thread_id=_thread_id(config))
 
 
+# --- Browser reading ------------------------------------------------------
+def _is_public_host(host: str) -> bool:
+    """True only if every IP the host resolves to is a public address."""
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        return False
+    for info in infos:
+        addr = info[4][0].split("%")[0]
+        try:
+            if not ip_address(addr).is_global:
+                return False
+        except ValueError:
+            return False
+    return True
 
 
-
-
-# for brower automation
 def validate_url(url: str) -> bool:
-    """Allow public HTTP/HTTPS website URLs only."""
+    """Allow public HTTP/HTTPS website URLs only (blocks localhost and private IPs)."""
     try:
         parsed = urlparse(url)
-
         if parsed.scheme not in ("http", "https"):
-            print("This is an not https or http URL")
             return False
-
         if not parsed.hostname or parsed.username or parsed.password:
-            print("plz login this wedsite before using so, i can acess")
             return False
 
         host = parsed.hostname.lower()
-
         if host == "localhost" or host.endswith(".localhost"):
             return False
-
-        # Reject direct connections to private/reserved IPs.
-        try:
-            ip = ip_address(host)
-            if not ip.is_global:
-                return False
-        except ValueError:
-            pass  # Hostname; DNS must also be checked in production.
-
-        return True
-
+        return _is_public_host(host)
     except (ValueError, TypeError):
         return False
 
@@ -234,102 +266,58 @@ def validate_url(url: str) -> bool:
 @tool
 def browser_read(url: str) -> str:
     """Open a public website and return its title and readable text.
-    Use this when the user asks the AI to visit or read a webpage.
+    Use this when the user asks to visit or read a webpage.
     Input: a complete HTTP or HTTPS URL.
     """
     if not validate_url(url):
         return "Invalid URL. Provide a public HTTP/HTTPS website."
 
     try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return "Browser tool unavailable: run 'pip install playwright' and 'playwright install chromium'."
+
+    try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.set_default_timeout(15000)
+                response = page.goto(url, wait_until="domcontentloaded", timeout=20000)
 
-            page = browser.new_page()
-            page.set_default_timeout(15000)
+                if response is None:
+                    return "The website did not return a response."
+                if response.status >= 400:
+                    return f"Website returned HTTP {response.status}."
+                if not validate_url(page.url):  # a redirect must not lead somewhere private
+                    return "The page redirected to a blocked address."
 
-            response = page.goto(
-                url,
-                wait_until="domcontentloaded",
-                timeout=20000,
-            )
-
-            if response is None:
-                result = "The website did not return a response."
-            elif response.status >= 400:
-                result = f"Website returned HTTP {response.status}."
-            else:
-                title = page.title()
-                text = page.locator("body").inner_text(
-                    timeout=10000
-                )
-
-                result = (
-                    f"Website: {page.url}\n"
-                    f"Title: {title}\n\n"
-                    f"Content:\n{text[:10000]}"
-                )
-
-            browser.close()
-            return result
-
+                text = page.locator("body").inner_text(timeout=10000)
+                return f"Website: {page.url}\nTitle: {page.title()}\n\nContent:\n{text[:10000]}"
+            finally:
+                browser.close()
     except Exception as e:
         return f"Browser error: {type(e).__name__}: {e}"
 
 
-
-#for travel agent 
-"""
-travel_agent.py - an AI travel assistant that can answer things like:
-
-  "Give me a 7 day trip plan from Nepal to UAE"
-  "What are the main airports in Thailand?"
-  "Status of flight EK203"
-  "What's the weather in Dubai next week and how much is 500 USD in AED?"
-
-Setup:
-    pip install requests python-dotenv langchain langchain-core langgraph \
-                langchain-anthropic
-
-.env file:
-    AVIATIONSTACK_API_KEY=your_aviationstack_key
-    ANTHROPIC_API_KEY=your_anthropic_key
-
-Web search is NOT included here. Plug in your own search tool(s) through
-EXTRA_TOOLS near the bottom of this file.
-
-Free APIs used without a key: REST Countries, Open-Meteo, open.er-api.com.
-"""
-
-import os
-from datetime import datetime
-from typing import Any, Optional
-
-import requests
-from dotenv import load_dotenv
-from langchain_core.tools import tool
-
-load_dotenv()
-
+# ==========================================================================
+# 2. TRAVEL TOOLS
+# ==========================================================================
 AVIATIONSTACK_KEY = os.getenv("AVIATIONSTACK_API_KEY")
 AVIATIONSTACK_URL = "http://api.aviationstack.com/v1"  # free plan = http only
 RESTCOUNTRIES = "https://restcountries.com/v3.1"
 OPEN_METEO_GEO = "https://geocoding-api.open-meteo.com/v1/search"
 OPEN_METEO_FORECAST = "https://api.open-meteo.com/v1/forecast"
 FX_URL = "https://open.er-api.com/v6/latest"
-TIMEOUT = 15
 VALID_STATUSES = {"scheduled", "active", "landed", "cancelled", "incident", "diverted"}
 
-
-# ==========================================================================
-# Static data
-# ==========================================================================
 COUNTRY_ALIASES = {
     "uae": "AE", "emirates": "AE", "uk": "GB", "britain": "GB", "england": "GB",
     "usa": "US", "america": "US", "korea": "KR", "south korea": "KR",
     "russia": "RU", "vietnam": "VN", "holland": "NL",
 }
 
-# Regional blocs (by ISO alpha-2 code). Static list, so double-check for official use.
+# Regional blocs (ISO alpha-2). Static list, double-check for official use.
 BLOCS = {
     "GCC (Gulf Cooperation Council)": {"BH", "KW", "OM", "QA", "SA", "AE"},
     "SAARC": {"AF", "BD", "BT", "IN", "MV", "NP", "PK", "LK"},
@@ -461,9 +449,9 @@ WMO_CODES = {
 }
 
 
-# ==========================================================================
+# --------------------------------------------------------------------------
 # HTTP helpers
-# ==========================================================================
+# --------------------------------------------------------------------------
 def _get_json(url: str, params: Optional[dict] = None, check_status: bool = True) -> Any:
     try:
         r = requests.get(url, params=params, timeout=TIMEOUT)
@@ -492,9 +480,9 @@ def _aviation(endpoint: str, params: Optional[dict] = None) -> dict:
     return data
 
 
-# ==========================================================================
+# --------------------------------------------------------------------------
 # Formatting helpers
-# ==========================================================================
+# --------------------------------------------------------------------------
 def _fmt_time(value: Optional[str]) -> str:
     if not value:
         return "N/A"
@@ -559,9 +547,9 @@ def _format_airline(a: dict) -> str:
     )
 
 
-# ==========================================================================
+# --------------------------------------------------------------------------
 # Country helpers
-# ==========================================================================
+# --------------------------------------------------------------------------
 def _fetch_country(query: str) -> Optional[dict]:
     q = query.strip()
     q = COUNTRY_ALIASES.get(q.lower(), q)
@@ -593,18 +581,15 @@ def _border_names(codes: list) -> list:
         return codes
 
 
-# ==========================================================================
-# TOOLS - general
-# ==========================================================================
+# --------------------------------------------------------------------------
+# Travel tools: general, countries, airports
+# --------------------------------------------------------------------------
 @tool
 def get_today() -> str:
     """Get today's date and weekday. Use this before planning trips or checking dates."""
     return datetime.now().strftime("Today is %A, %d %B %Y.")
 
 
-# ==========================================================================
-# TOOLS - countries and airports
-# ==========================================================================
 @tool
 def get_country_info(country: str) -> str:
     """Get detailed info about a country: official name, alternate names, ISO codes,
@@ -699,9 +684,9 @@ def search_airports(search: str) -> str:
     return "\n\n".join(_format_airport(a) for a in airports)
 
 
-# ==========================================================================
-# TOOLS - flights
-# ==========================================================================
+# --------------------------------------------------------------------------
+# Travel tools: flights
+# --------------------------------------------------------------------------
 @tool
 def get_flight_status(flight_iata: str) -> str:
     """Get live status, airline, airports, terminal, gate, schedule and delay for a flight.
@@ -838,9 +823,9 @@ def get_airline_info(search: str) -> str:
     return "\n\n".join(_format_airline(a) for a in airlines)
 
 
-# ==========================================================================
-# TOOLS - weather, currency, budget
-# ==========================================================================
+# --------------------------------------------------------------------------
+# Travel tools: forecast, currency, budget
+# --------------------------------------------------------------------------
 @tool
 def get_weather_forecast(city: str, days: int = 7) -> str:
     """Get a daily weather forecast (up to 16 days) for a city.
@@ -950,15 +935,21 @@ def estimate_trip_budget(
     )
 
 
-# --------------------------------------------------------------------------
-# Plug in your own tools here (e.g. your existing web search tool).
-# Example:
-#     from my_search_tools import search_web
-#     EXTRA_TOOLS = [search_web]
-# --------------------------------------------------------------------------
-EXTRA_TOOLS: list = []
+# ==========================================================================
+# Tool lists
+# ==========================================================================
+GENERAL_TOOLS = [
+    calculator,
+    remember_this,
+    recall_memory,
+    get_weather,
+    search_uploaded_document,
+    browser_read,
+]
+if web_search is not None:
+    GENERAL_TOOLS.insert(0, web_search)
 
-ALL_TOOLS = [
+TRAVEL_TOOLS = [
     get_today,
     get_country_info,
     get_main_airports,
@@ -971,14 +962,16 @@ ALL_TOOLS = [
     get_weather_forecast,
     convert_currency,
     estimate_trip_budget,
-] + EXTRA_TOOLS
+]
+
+ALL_TOOLS = GENERAL_TOOLS + TRAVEL_TOOLS
 
 
 # ==========================================================================
-# Agent
+# 3. AGENT
 # ==========================================================================
-SYSTEM_PROMPT = """You are a helpful, accurate travel assistant. You can plan trips, explain
-countries, find airports, check flights, and handle weather, currency and budgets using your tools.
+SYSTEM_PROMPT = """You are a helpful, accurate assistant with tools for web search, math, memory,
+uploaded documents, web pages, weather, and travel planning.
 
 HOW TO WORK
 - Use tools for facts. Never invent flight numbers, prices, gates, schedules or visa rules.
@@ -1010,28 +1003,49 @@ HONESTY
   user to check the airline or a booking site for prices and exact times.
 - Label estimates as estimates. If a tool fails, say so and continue with what you have.
 """
-from langchain_google_genai import ChatGoogleGenerativeAI
 
-def build_agent():
-    from langchain.chat_models import init_chat_model
+DEFAULT_AGENT_MODEL = "gemini-2.5-flash"
 
-    model_name = os.getenv("TRAVEL_AGENT_MODEL", "anthropic:claude-sonnet-4-6")
-    llm = ChatGoogleGenerativeAI(model="gemini-3.6-flash")
+
+def make_llm(model_name: Optional[str] = None):
+    """Gemini models use the Google API; anything else is treated as a local Ollama model."""
+    model_name = model_name or os.getenv("TRAVEL_AGENT_MODEL", DEFAULT_AGENT_MODEL)
+    if model_name.startswith("gemini"):
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
+        return ChatGoogleGenerativeAI(model=model_name)
+
+    from langchain_ollama import ChatOllama
+
+    return ChatOllama(model=model_name)
+
+
+def build_agent(model_name: Optional[str] = None, tools: Optional[list] = None):
+    llm = make_llm(model_name)
+    tools = tools if tools is not None else ALL_TOOLS
 
     try:  # LangChain 1.x
         from langchain.agents import create_agent
 
-        return create_agent(model=llm, tools=ALL_TOOLS, system_prompt=SYSTEM_PROMPT)
+        return create_agent(model=llm, tools=tools, system_prompt=SYSTEM_PROMPT)
     except ImportError:  # older versions
         from langgraph.prebuilt import create_react_agent
 
-        return create_react_agent(llm, ALL_TOOLS, prompt=SYSTEM_PROMPT)
+        return create_react_agent(llm, tools, prompt=SYSTEM_PROMPT)
 
 
 def _text(content) -> str:
+    """Flatten a model message's content (str or list of blocks) into plain text."""
     if isinstance(content, str):
         return content
     return "".join(
         b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"
     )
 
+
+# --------------------------------------------------------------------------
+# Backward-compatible aliases (old names, in case other files import them)
+# --------------------------------------------------------------------------
+thred_id_set = set_thread_id
+rember_this = remember_this
+wed_search = web_search

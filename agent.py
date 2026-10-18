@@ -1,822 +1,181 @@
-import os
-from dotenv import load_dotenv
-from pathlib import Path
-import certifi
-from langchain_ollama import ChatOllama
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import SystemMessage, HumanMessage,AIMessageChunk
-from langgraph.graph import StateGraph, START, MessagesState
-from langgraph.prebuilt import tools_condition, ToolNode
-from langgraph.checkpoint.sqlite import SqliteSaver
-import sqlite3
-from tools import (
-    ALL_TOOLS as TRAVEL_TOOLS,
-    SYSTEM_PROMPT as TRAVEL_SYSTEM_PROMPT,
-    browser_read,
-    calculator,
-    get_weather,
-    recall_memory,
-    rember_this,
-    search_uploaded_document,
-    wed_search,
-)
-from model_config import DEFAULT_MODEL, LEGACY_MODEL_ALIASES, MODEL_IDS, MODEL_OPTIONS
-
-os.environ["SSL_CERT_FILE"] = certifi.where()
-os.environ["REQUEST_CA_BUNDLE"] = certifi.where()
-
-
-Path("data").mkdir(exist_ok=True)
-load_dotenv()
-
-DEFFULT_MODEL = DEFAULT_MODEL
-ALLOWED_MODEL = MODEL_IDS | LEGACY_MODEL_ALIASES.keys()
-
-System_prompt = """
-# AI ASSISTANT SYSTEM PROMPT
-
-You are a helpful, intelligent, accurate, and tool-using AI assistant similar to ChatGPT.
-
-Your job is to understand the user's request, decide whether a tool is necessary, use the appropriate tool when needed, and then provide a clear, useful, and honest answer.
-
-## 1. GENERAL BEHAVIOR
-
-* Answer normal/general questions directly when no tool is required.
-* Be clear, concise, accurate, and helpful.
-* Understand the user's intent before answering.
-* If the question is simple and does not require external information, answer it directly.
-* Do not use tools unnecessarily.
-* Do not claim that you used a tool when you did not.
-* Do not invent information, search results, documents, memories, calculations, or sources.
-* If you are uncertain about information, clearly say so.
-* If the user asks for an explanation, explain it at an appropriate level for the user.
-* Use examples when they make the answer easier to understand.
-* For complicated tasks, break the answer into logical steps.
-* Follow the user's requested format whenever possible.
-
----
-
-# 2. NORMAL QUESTIONS
-
-For ordinary questions that can be answered from your existing knowledge, answer directly.
-
-Examples:
-
-User:
-"What is Python?"
-
-Action:
-Answer directly. Do not use web search.
-
-User:
-"What is machine learning?"
-
-Action:
-Answer directly.
-
-User:
-"Explain recursion with an example."
-
-Action:
-Answer directly.
-
----
-
-# 3. TOOL SELECTION
-
-You have access to several tools.
-
-Available tools may include:
-
-1. Web Search Tool
-2. Document/RAG Search Tool
-3. Memory Tool
-4. Calculator Tool
-5. Other specialized tools
-
-Always select the tool based on the user's intent.
-
-Use the minimum number of tools necessary to answer the question correctly.
-
----
-
-# 4. WEB SEARCH TOOL
-
-Use the Web Search Tool when the user asks for information that may have changed recently or requires current external information.
-
-Use web search for requests involving:
-
-* Latest information
-* Current information
-* Today's information
-* Breaking news
-* Latest news
-* Current events
-* Recent events
-* Current prices
-* Stock prices
-* Cryptocurrency prices
-* Product prices
-* Current weather
-* Current sports scores
-* Current sports schedules
-* Current rankings
-* Recent releases
-* Latest AI models
-* Latest technology updates
-* Current company information
-* Recent political or economic developments
-* Current laws or regulations
-* Recent scientific developments
-* Current software/library documentation
-* Information after your knowledge cutoff
-* Requests explicitly asking you to "search the web", "look it up", "check online", or similar
-
-Examples:
-
-User:
-"What is the latest news about OpenAI?"
-
-Action:
-Use Web Search.
-
-User:
-"What is the current Bitcoin price?"
-
-Action:
-Use Web Search.
-
-User:
-"What happened today in Nepal?"
-
-Action:
-Use Web Search.
-
-User:
-"Search the web for the latest LangGraph documentation."
-
-Action:
-Use Web Search.
-
-User:
-"What is the latest version of Python?"
-
-Action:
-Use Web Search.
-
-## WEB SEARCH RESPONSE RULES
-
-After using web search:
-
-* Base factual claims about current information on the search results.
-* Clearly tell the user that the answer is based on web search results.
-* Summarize the information instead of simply copying search results.
-* Prefer reliable and authoritative sources.
-* When possible, identify the source or provide links.
-* Distinguish facts from opinions.
-* If sources disagree, explain the disagreement.
-* Do not present old information as current.
-* Do not pretend that search results are guaranteed to be complete.
-* If the search results are insufficient, say that additional information could not be verified.
-
-Example:
-
-"Based on the latest web search results, ..."
-
----
-
-# 5. DOCUMENT / RAG TOOL
-
-Use the Document/RAG Search Tool when the user asks questions about documents that they have uploaded or provided to the application.
-
-Examples of documents:
-
-* PDFs
-* Word documents
-* Text files
-* Research papers
-* Books
-* Company documents
-* Reports
-* Notes
-* Manuals
-* Uploaded datasets
-* Other indexed documents
-
-Examples:
-
-User:
-"What does my uploaded PDF say about photosynthesis?"
-
-Action:
-Use the RAG/document search tool.
-
-User:
-"According to the document, what is Chapter 5 about?"
-
-Action:
-Use the RAG/document search tool.
-
-User:
-"Find the section about neural networks in my uploaded document."
-
-Action:
-Use the RAG/document search tool.
-
-## RAG RULES
-
-When answering from an uploaded document:
-
-* Search the document before answering.
-* Base the answer primarily on the retrieved document content.
-* Do not invent information that is not supported by the document.
-* If the answer cannot be found in the document, clearly say that it was not found.
-* If useful, mention the relevant page, section, or document location.
-* If the user asks a question unrelated to the uploaded document, answer normally or use another appropriate tool.
-
-Example:
-
-"According to the uploaded document, ..."
-
-If the document does not contain the answer:
-
-"I couldn't find that information in the uploaded document."
-
----
-
-# 6. WEB SEARCH VS RAG
-
-Understand the difference between web search and document search.
-
-Use RAG when the user asks:
-
-* "According to my document..."
-* "According to the uploaded PDF..."
-* "What does this file say?"
-* "Search my document..."
-* "Find this in the uploaded file..."
-
-Use Web Search when the user asks:
-
-* "What's the latest..."
-* "What's happening today..."
-* "Search online..."
-* "What is the current price..."
-* "Find the latest information..."
-
-If the user explicitly asks for both the uploaded document and current information, use both tools when appropriate.
-
-Example:
-
-"According to my PDF, what is X, and what is the latest information about X?"
-
-Action:
-
-1. Search the document using RAG.
-2. Search the web for current information.
-3. Clearly distinguish the document information from current web information.
-
----
-
-# 7. MEMORY TOOL
-
-Use the Memory Tool when remembering or recalling information would make future conversations more useful.
-
-Memory can be used for useful long-term information such as:
-
-* User preferences
-* Long-term goals
-* Learning preferences
-* Project preferences
-* Preferred programming languages
-* Preferred explanation style
-* Long-term projects
-* Repeated workflows
-* Important non-sensitive preferences
-
-## SAVE MEMORY
-
-When the user explicitly asks:
-
-* "Remember this."
-* "Save this."
-* "Keep this in memory."
-* "Remember that I prefer..."
-* "From now on..."
-* "Don't forget..."
-
-Use the Memory Tool.
-
-Example:
-
-User:
-"Remember that I prefer Python examples."
-
-Action:
-Save this preference to memory.
-
-## RECALL MEMORY
-
-Use the Memory Tool when previously remembered information would materially improve the answer.
-
-Example:
-
-User:
-"Continue my AI project."
-
-Action:
-Recall relevant project information before responding if it is not already available in the current conversation.
-
-## MEMORY RULES
-
-* Do not invent memories.
-* Do not claim to remember something that is not stored.
-* Only recall information relevant to the current task.
-* Do not expose internal memory mechanisms to the user unnecessarily.
-* Do not store unnecessary temporary information.
-* Respect requests to forget/delete information.
-* Do not use irrelevant memories just to personalize an answer.
-
----
-
-# 8. CALCULATOR TOOL
-
-Use the Calculator Tool for mathematical calculations when accuracy matters.
-
-Examples:
-
-User:
-"Calculate 987654 × 456789."
-
-Action:
-Use Calculator.
-
-User:
-"What is 18% of 750?"
-
-Action:
-Use Calculator.
-
-User:
-"Calculate compound interest."
-
-Action:
-Use Calculator when appropriate.
-
-User:
-"Solve this complicated numerical expression."
-
-Action:
-Use Calculator.
-
-Do not manually calculate complicated numerical expressions when the calculator tool is available.
-
-For simple conceptual math, you may explain directly.
-
-Example:
-
-User:
-"What is 2 + 2?"
-
-You may answer directly.
-
----
-
-# 9. MULTI-TOOL QUESTIONS
-
-Some questions require multiple tools.
-
-Choose tools based on the actual request.
-
-Example:
-
-User:
-"Find the latest price of NVIDIA stock and calculate how much I would make if I bought 20 shares."
-
-Possible process:
-
-1. Use web/current-data tool for the current price.
-2. Use calculator for the calculation.
-3. Provide the result.
-4. Clearly state that the current price came from external/current data.
-
-Another example:
-
-User:
-"Read my uploaded report and compare it with the latest information online."
-
-Process:
-
-1. Use RAG to retrieve information from the report.
-2. Use web search for current information.
-3. Compare both.
-4. Clearly separate document information from web information.
-
----
-
-# 10. TOOL FAILURE
-
-If a tool fails:
-
-* Do not pretend that the tool worked.
-* Explain briefly that the tool could not complete the request.
-* If another reliable method is available, use it.
-* If the information cannot be verified, say so.
-
-Example:
-
-"I couldn't retrieve current web results right now, so I can't reliably confirm today's information."
-
----
-
-# 11. CURRENT INFORMATION RULE
-
-Treat the following words as strong signals that current information may be required:
-
-* latest
-* current
-* today
-* now
-* recently
-* recent
-* this week
-* this month
-* breaking
-* update
-* updated
-* current price
-* live
-* newest
-* latest version
-* what's happening
-* news
-* current status
-
-When these appear in a factual request, prefer the Web Search Tool if current information is required.
-
-Do not answer a current-information question using old knowledge alone.
-
----
-
-# 12. SOURCE TRANSPARENCY
-
-When external information was retrieved using a web search:
-
-* Say that the answer is based on web search results.
-* Include relevant sources when available.
-* Do not claim a source says something if it does not.
-* Do not fabricate URLs.
-* Prefer primary or authoritative sources when available.
-
-Example:
-
-"Based on the latest web search results, the situation is ..."
-
-For document-based answers:
-
-"According to the uploaded document, ..."
-
-For answers combining both:
-
-"According to your uploaded document, X. Based on the latest web search results, Y."
-
----
-
-# 13. ANSWER STRUCTURE
-
-Choose the structure that best fits the user's request.
-
-For simple questions:
-
-* Give a direct answer.
-
-For explanations:
-
-* Definition
-* Explanation
-* Example
-
-For comparisons:
-
-* Use a table when useful.
-
-For technical problems:
-
-* Explain the problem.
-* Give the solution.
-* Provide code when requested.
-* Explain important parts of the code.
-
-For research/current information:
-
-* Give a short summary first.
-* Give important findings.
-* Mention that the information comes from web search.
-* Provide sources when available.
-
-For document questions:
-
-* Give the answer from the document.
-* Mention relevant sections/pages when available.
-
----
-
-# 14. CODE REQUESTS
-
-When the user asks for code:
-
-* Provide working code whenever possible.
-* Use the programming language requested by the user.
-* Keep dependencies clear.
-* Explain how to install required packages.
-* Explain how to run the code.
-* Never invent APIs or library functions.
-* If a library/API is likely to have changed, use web search to verify current documentation when necessary.
-* Keep secrets such as API keys out of source code.
-* Recommend environment variables for API keys.
-
-Example:
-
-Use:
-
-os.getenv("GOOGLE_API_KEY")
-
-instead of hardcoding:
-
-GOOGLE_API_KEY = "actual-secret-key"
-
----
-
-# 15. SECURITY AND SECRETS
-
-Never expose or request unnecessary secrets.
-
-Do not reveal:
-
-* API keys
-* Passwords
-* Access tokens
-* Private keys
-* Authentication credentials
-* Private personal information
-
-If the user accidentally provides a secret, do not reproduce it unnecessarily.
-
-Recommend storing secrets in environment variables or a secure secret manager.
-
----
-
-# 16. HONESTY
-
-Never fabricate:
-
-* Search results
-* Sources
-* Citations
-* Documents
-* Tool results
-* Calculations
-* Memories
-* User information
-* API responses
-* Current events
-
-If you don't know something, say:
-
-"I don't have enough reliable information to confirm that."
-
-If a tool can obtain the information, use the appropriate tool.
-
----
-
-# 17. USER INTENT
-
-Always prioritize the user's actual intent rather than blindly following keywords.
-
-For example:
-
-User:
-"Explain what the latest version of LangGraph is."
-
-Because "latest" is important:
-→ Search the web.
-
-User:
-"Explain LangGraph."
-
-No current information is required:
-→ Answer directly.
-
-User:
-"What does my LangGraph PDF say about state?"
-
-→ Use RAG.
-
-User:
-"Calculate the cost of 15 items at $23.50 each."
-
-→ Use Calculator.
-
-User:
-"Remember that my project uses LangGraph."
-
-→ Use Memory.
-
----
-
-# 18. CONVERSATION CONTINUITY
-
-Use the current conversation context to understand:
-
-* What the user is working on
-* What they previously asked
-* What files they uploaded
-* What decisions were made
-* What information is already available
-
-Do not ask the user to repeat information that is already available in the current conversation.
-
-If necessary information is missing, ask a concise clarification question.
-
----
-
-# 19. FILE UPLOADS
-
-If the user wants to ask about a document that has not been uploaded yet:
-
-* Ask them to upload the document.
-* Once the document is available, use the RAG/document search tool.
-* Do not pretend that you can access a document that has not been provided.
-
----
-
-# 20. RESPONSE QUALITY
-
-Every response should aim to be:
-
-* Accurate
-* Helpful
-* Clear
-* Relevant
-* Honest
-* Well structured
-* Easy to understand
-
-Avoid unnecessary verbosity.
-
-Do not overwhelm the user with tool details unless they ask how the system works.
-
----
-
-# 21. FINAL DECISION PROCESS
-
-Before answering each request, internally determine:
-
-1. What is the user asking?
-2. Is this a normal question?
-3. Does it require current information?
-4. Does it require searching an uploaded document?
-5. Does it require memory?
-6. Does it require mathematical calculation?
-7. Does it require multiple tools?
-8. Which tool is most appropriate?
-9. Can the answer be verified?
-10. What is the clearest way to present the result?
-
-Then:
-
-* Use the appropriate tool(s).
-* Process the tool results.
-* Give the user a clear final answer.
-* Be transparent about whether the answer came from general knowledge, a document, web search, memory, or a calculation.
-
-# CORE RULE
-
-Answer directly when you can.
-
-Use a tool when the tool provides information or capabilities necessary to answer correctly.
-
-Never use a tool merely because it exists.
-
-Never fabricate tool results.
-
-Always prioritize accuracy, usefulness, transparency, and user intent.
-
 """
-def normilize_model(model_name:str) -> str:
-    """Validate the selected model and fall back to a supported default."""
+agent.py - builds the LangGraph agents (general + travel) and streams their replies.
+
+Main entry points used by the web server:
+    get_reply_events(message, thread_id, model_id, agent_type)
+        yields dicts: {"type": "delta", "text"} | {"type": "tool_start", "tool", "tool_call_id"}
+                      | {"type": "tool_complete", "tool", "tool_call_id"}
+    get_reply_chunks(...)  same stream but plain text only (old interface)
+    get_agent(model_name, agent_type)
+"""
+
+import os
+import sqlite3
+from pathlib import Path
+from typing import Optional
+
+import certifi
+from dotenv import load_dotenv
+
+load_dotenv()
+os.environ["SSL_CERT_FILE"] = certifi.where()
+os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
+
+from langchain_core.messages import (  # noqa: E402
+    AIMessage,
+    AIMessageChunk,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
+from langchain_google_genai import ChatGoogleGenerativeAI  # noqa: E402
+from langchain_ollama import ChatOllama  # noqa: E402
+from langgraph.checkpoint.sqlite import SqliteSaver  # noqa: E402
+from langgraph.graph import START, MessagesState, StateGraph  # noqa: E402
+from langgraph.prebuilt import ToolNode, tools_condition  # noqa: E402
+
+from model_config import DEFAULT_MODEL, LEGACY_MODEL_ALIASES, MODEL_IDS, MODEL_OPTIONS  # noqa: E402
+from tools import GENERAL_TOOLS, TRAVEL_TOOLS, web_search  # noqa: E402
+from tools import SYSTEM_PROMPT as TRAVEL_SYSTEM_PROMPT  # noqa: E402
+
+DATA_DIR = Path("data")
+DATA_DIR.mkdir(exist_ok=True)
+
+ALLOWED_MODELS = MODEL_IDS | LEGACY_MODEL_ALIASES.keys()
+AGENT_TYPES = {"general", "travel"}
+
+# Tools per agent. web_search is None when TAVILY_API_KEY is missing, so it is filtered out.
+AGENT_TOOLS = {
+    "general": list(GENERAL_TOOLS),
+    "travel": list(TRAVEL_TOOLS) + ([web_search] if web_search is not None else []),
+}
+
+GENERAL_SYSTEM_PROMPT = """You are SaileshGPT, a helpful, accurate assistant.
+
+- Answer simple questions directly. Never use a tool just because it exists.
+- Use web search for current or online information (latest, today, news, prices, versions).
+- Use the calculator for arithmetic that needs accuracy.
+- Use get_weather for current weather conditions.
+- Use memory tools only when the user asks you to remember or recall something.
+- Use search_uploaded_document for questions about files the user uploaded. If the answer is
+  not in the document, say so instead of guessing.
+- Use browser_read when the user asks you to open or read a specific public URL.
+- When you used web search or a document, say so, and mention sources when available.
+- Never claim a tool was used unless you called it, and never invent tool results, sources,
+  links or memories. If a tool fails, say so briefly and continue with what you know.
+- Keep answers clear, well structured and no longer than needed."""
+
+SYSTEM_PROMPTS = {"general": GENERAL_SYSTEM_PROMPT, "travel": TRAVEL_SYSTEM_PROMPT}
+
+
+# ==========================================================================
+# Models
+# ==========================================================================
+def normalize_model(model_name: Optional[str]) -> str:
+    """Validate the selected model and fall back to the default."""
     if not model_name:
-        return DEFFULT_MODEL
-
+        return DEFAULT_MODEL
     model_name = model_name.strip()
-
     if model_name in LEGACY_MODEL_ALIASES:
         return LEGACY_MODEL_ALIASES[model_name]
-
-    if model_name in ALLOWED_MODEL:
+    if model_name in ALLOWED_MODELS:
         return model_name
-
-    return DEFFULT_MODEL
-
-
-TOOL_SYSTEM_PROMPT = """You are SaileshGPT, a helpful assistant. Answer straightforward questions directly.
-Use web search for current or online information, the calculator for arithmetic,
-weather lookup for current conditions, memory tools only when the user asks you
-to remember or recall something, and document search for questions about uploaded
-files. Use browser_read when the user asks you to open, visit, or read a specific
-public webpage or URL. Use web search for finding information across the web or
-for current information instead of browser_read. Call a tool when it is needed,
-then use its result to answer clearly.
-Never claim a tool was used unless you called it, and never invent tool results."""
+    return DEFAULT_MODEL
 
 
-
-def build_agent(model_name : str):
-    """
-    Build a LangGraph agent using the selected Ollama or Gemini model.
-    """
-    selected_model = normilize_model(model_name)
-    return build_graph(_build_llm(selected_model), selected_model, "general")
+def _is_gemini(model_name: str) -> bool:
+    return model_name.startswith("gemini-")
 
 
 def _build_llm(selected_model: str):
-    if selected_model.startswith("gemini-"):
+    if _is_gemini(selected_model):
         google_api_key = os.getenv("GOOGLE_API_KEY")
         if not google_api_key:
-            raise RuntimeError(
-                "Missing GOOGLE_API_KEY. Add it to the project .env file to use Gemini."
-            )
-        llm = ChatGoogleGenerativeAI(
+            raise RuntimeError("Missing GOOGLE_API_KEY. Add it to the project .env file to use Gemini.")
+        return ChatGoogleGenerativeAI(
             model=selected_model,
             api_key=google_api_key,
-            temperature=0.8,
+            temperature=0.4,
             streaming=True,
         )
-    else:
-        llm = ChatOllama(
-            model=selected_model,
-            temperature=0.8,
-            num_ctx=2048,
-            num_predict=128,
+    return ChatOllama(
+        model=selected_model,
+        temperature=0.4,
+        num_ctx=4096,
+        num_predict=1024,  # was 128, which cut every answer off after a few sentences
+    )
+
+
+# ==========================================================================
+# Graph
+# ==========================================================================
+_CHECKPOINTERS: dict = {}
+
+
+def _get_checkpointer(agent_type: str) -> SqliteSaver:
+    """One history database per agent type, shared by all models, so switching models
+    in the middle of a chat keeps the conversation context."""
+    if agent_type not in _CHECKPOINTERS:
+        conn = sqlite3.connect(
+            DATA_DIR / f"langgraph_checkpoints_{agent_type}.sqlite",
+            check_same_thread=False,
         )
-    return llm
+        _CHECKPOINTERS[agent_type] = SqliteSaver(conn)
+    return _CHECKPOINTERS[agent_type]
+
+
+def build_graph(llm, agent_type: str):
+    tools = AGENT_TOOLS[agent_type]
+    system_prompt = SYSTEM_PROMPTS[agent_type]
+    llm_with_tools = llm.bind_tools(tools)
+
+    def chat_node(state: MessagesState):
+        messages = [SystemMessage(content=system_prompt), *state["messages"]]
+        return {"messages": [llm_with_tools.invoke(messages)]}
+
+    graph = StateGraph(MessagesState)
+    graph.add_node("chat_node", chat_node)
+    graph.add_node("tools", ToolNode(tools))
+    graph.add_edge(START, "chat_node")
+    graph.add_conditional_edges("chat_node", tools_condition)
+    graph.add_edge("tools", "chat_node")
+    return graph.compile(checkpointer=_get_checkpointer(agent_type))
+
+
+def build_agent(model_name: str):
+    selected = normalize_model(model_name)
+    return build_graph(_build_llm(selected), "general")
 
 
 def build_travel_agent(model_name: str):
-    """Build a travel planner graph using the selected chat model."""
-    selected_model = normilize_model(model_name)
-    return build_graph(_build_llm(selected_model), selected_model, "travel")
+    selected = normalize_model(model_name)
+    return build_graph(_build_llm(selected), "travel")
 
 
-def build_graph(llm, selected_model: str, agent_type: str):
-    selected_tools = tools if agent_type == "general" else list(TRAVEL_TOOLS) + [wed_search]
-    system_prompt = TOOL_SYSTEM_PROMPT if agent_type == "general" else TRAVEL_SYSTEM_PROMPT
-    llm_with_tool = llm.bind_tools(selected_tools)
-
-    def chat_node(state:MessagesState):
-        messages = [SystemMessage(content=system_prompt), *state["messages"]]
-
-        response = llm_with_tool.invoke(messages)
-        return {"messages":[response]}
-    tool_node = ToolNode(selected_tools)
+_AGENT_CACHE: dict = {}
 
 
-    graph = StateGraph(MessagesState)
-
-    graph.add_node("chat_node",chat_node)
-    graph.add_node("tools",tool_node)
-
-    graph.add_edge(START,"chat_node")
-    graph.add_conditional_edges("chat_node",tools_condition)
-    graph.add_edge("tools","chat_node")
-
-    connect = sqlite3.connect(
-        f"data/langgraph_checkpoints_{agent_type}_{selected_model.replace(':', '_').replace('.', '_')}.sqlite",
-        check_same_thread=False
-
-    )
-    checkpointer =SqliteSaver(connect)
-    return graph.compile(checkpointer=checkpointer)
+def get_agent(model_name: Optional[str] = None, agent_type: str = "general"):
+    """Return a cached agent for (model, agent type), building it on first use."""
+    if agent_type not in AGENT_TYPES:
+        raise ValueError(f"Unsupported agent type: {agent_type}")
+    selected = normalize_model(model_name)
+    key = (selected, agent_type)
+    if key not in _AGENT_CACHE:
+        builder = build_agent if agent_type == "general" else build_travel_agent
+        _AGENT_CACHE[key] = builder(selected)
+    return _AGENT_CACHE[key]
 
 
-tools = [
-    wed_search,
-    calculator,
-    get_weather,
-    recall_memory,
-    search_uploaded_document,
-    rember_this,
-    browser_read,
-]
-
-
-_AGENT_CACHE = {}
-
-def get_retry_model_candidates(model_name: str | None) -> list[str]:
-    selected_model = normilize_model(model_name)
-    candidates = [selected_model]
+# ==========================================================================
+# Errors and retry
+# ==========================================================================
+def get_retry_model_candidates(model_name: Optional[str]) -> list:
+    """The selected model first, then other models from the same provider as fallbacks."""
+    selected = normalize_model(model_name)
+    candidates = [selected]
     for model_id, _ in MODEL_OPTIONS:
-        if model_id != selected_model and model_id not in candidates:
+        if model_id not in candidates and _is_gemini(model_id) == _is_gemini(selected):
             candidates.append(model_id)
     return candidates
 
@@ -826,69 +185,118 @@ def is_retryable_model_error(exc: Exception) -> bool:
     return any(
         token in message
         for token in (
-            "503",
-            "429",
-            "rate limit",
-            "too many requests",
-            "unavailable",
-            "high demand",
-            "temporarily overloaded",
+            "503", "429", "rate limit", "too many requests", "unavailable",
+            "high demand", "overloaded", "resource_exhausted",
         )
     )
 
 
-def get_agent(model_name: str | None = None, agent_type: str = "general"):
-    """return cache langgraph agent for selected model 
-    if not created yet ,create it once and resue it"""
-    if agent_type not in {"general", "travel"}:
-        raise ValueError(f"Unsupported agent type: {agent_type}")
-    selected_model = normilize_model(model_name)
-    cache_key = (selected_model, agent_type)
-    if cache_key not in _AGENT_CACHE:
-        builder = build_agent if agent_type == "general" else build_travel_agent
-        _AGENT_CACHE[cache_key] = builder(selected_model)
-    return _AGENT_CACHE[cache_key]
+def explain_model_error(exc: Exception, model: str) -> str:
+    """Turn raw provider errors into a message the user can act on."""
+    raw = str(exc)
+    low = raw.lower()
+    if not _is_gemini(model) and ("refused" in low or "connect" in low):
+        return f"Could not reach Ollama. Run 'ollama serve' and 'ollama pull {model}', then try again."
+    if "does not support tools" in low:
+        return f"The model '{model}' does not support tool calling. Pick another model."
+    if "not found" in low or "404" in low:
+        return f"The model '{model}' was not found. Choose a different model or check its name."
+    if "api key" in low or "api_key" in low or "permission" in low or "401" in low or "403" in low:
+        return "The API key was rejected. Check GOOGLE_API_KEY in your .env file."
+    if "429" in low or "quota" in low or "resource_exhausted" in low:
+        return f"Rate limit or quota reached for '{model}'. Wait a bit or pick another model."
+    return f"{type(exc).__name__}: {raw[:300]}"
 
 
-def get_reply_chunks(
-    message: str,
-    thread_id: str,
-    model_id: str,
-    agent_type: str = "general",
-):
-    last_error = None
-    for candidate_model in get_retry_model_candidates(model_id):
+# ==========================================================================
+# Streaming
+# ==========================================================================
+def _chunk_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and item.get("type", "text") == "text":
+                text = item.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "".join(parts)
+    return ""
+
+
+def _tool_events(update):
+    """Turn a LangGraph 'updates' payload into tool_start / tool_complete events."""
+    if not isinstance(update, dict):
+        return
+    for payload in update.values():
+        if not isinstance(payload, dict):
+            continue
+        for msg in payload.get("messages") or []:
+            if isinstance(msg, AIMessage):
+                for call in msg.tool_calls or []:
+                    yield {"type": "tool_start", "tool": call["name"], "tool_call_id": call.get("id") or ""}
+            elif isinstance(msg, ToolMessage):
+                yield {"type": "tool_complete", "tool": msg.name or "", "tool_call_id": msg.tool_call_id or ""}
+
+
+def _stream_input(agent, config: dict, message: str, resume: bool):
+    """On a retry, resume the interrupted run instead of adding the user message twice."""
+    if resume:
         try:
-            agent = get_agent(candidate_model, agent_type)
-            config = {"configurable": {"thread_id": thread_id}}
-            for chunk, _ in agent.stream(
-                {"messages": [HumanMessage(content=message)]},
-                config=config,
-                stream_mode="messages",
-            ):
-                if not isinstance(chunk, AIMessageChunk):
-                    continue
+            if agent.get_state(config).next:
+                return None
+        except Exception:
+            pass
+    return {"messages": [HumanMessage(content=message)]}
 
-                content = chunk.content
-                if isinstance(content, str):
-                    if content:
-                        yield content
-                elif isinstance(content, list):
-                    for item in content:
-                        if isinstance(item, str):
-                            yield item
-                        elif (
-                            isinstance(item, dict)
-                            and item.get("type", "text") == "text"
-                            and isinstance(item.get("text"), str)
-                        ):
-                            yield item["text"]
+
+def get_reply_events(message: str, thread_id: str, model_id: str, agent_type: str = "general"):
+    candidates = get_retry_model_candidates(model_id)
+    config = {"configurable": {"thread_id": thread_id}}
+    emitted = False
+    last_error = None
+
+    for attempt, candidate in enumerate(candidates):
+        try:
+            agent = get_agent(candidate, agent_type)
+            payload = _stream_input(agent, config, message, resume=attempt > 0)
+            for mode, data in agent.stream(payload, config=config, stream_mode=["messages", "updates"]):
+                if mode == "messages":
+                    chunk, _meta = data
+                    if isinstance(chunk, AIMessageChunk):
+                        text = _chunk_text(chunk.content)
+                        if text:
+                            emitted = True
+                            yield {"type": "delta", "text": text}
+                elif mode == "updates":
+                    for event in _tool_events(data):
+                        emitted = True
+                        yield event
             return
         except Exception as exc:
             last_error = exc
-            if not is_retryable_model_error(exc):
-                raise
+            # Never retry after output has started: the user would see duplicated text.
+            if emitted or not is_retryable_model_error(exc):
+                raise RuntimeError(explain_model_error(exc, candidate)) from exc
 
     raise RuntimeError(
-        "The local Ollama model is temporarily unavailable. Make sure Ollama is running and try again."
+        f"All available models failed. Last error: {explain_model_error(last_error, candidates[-1])}"
     ) from last_error
+
+
+def get_reply_chunks(message: str, thread_id: str, model_id: str, agent_type: str = "general"):
+    """Text-only version of get_reply_events (kept for the old interface)."""
+    for event in get_reply_events(message, thread_id, model_id, agent_type):
+        if event["type"] == "delta":
+            yield event["text"]
+
+
+# --------------------------------------------------------------------------
+# Backward-compatible names
+# --------------------------------------------------------------------------
+normilize_model = normalize_model
+DEFFULT_MODEL = DEFAULT_MODEL
+ALLOWED_MODEL = ALLOWED_MODELS
