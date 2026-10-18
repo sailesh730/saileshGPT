@@ -184,22 +184,30 @@ async def prepare_chat_request(request: Request):
     if not isinstance(model_id, str) or model_id not in MODEL_IDS:
         return JSONResponse({"error": "Select a supported model."}, status_code=400)
 
-    return session_id, message, thread_id, is_new, model_id
+    agent_type = payload.get("agent", "general")
+    if not isinstance(agent_type, str) or agent_type not in {"general", "travel"}:
+        return JSONResponse({"error": "Select a supported assistant."}, status_code=400)
 
+    return session_id, message, thread_id, is_new, model_id, agent_type
 
-def get_reply_chunks(message: str, thread_id: str, model_id: str):
-    for event in get_reply_events(message, thread_id, model_id):
+def get_reply_chunks(message: str, thread_id: str, model_id: str, agent_type: str = "general"):
+    for event in get_reply_events(message, thread_id, model_id, agent_type):
         if event["type"] == "delta":
             yield event["text"]
 
 
-def get_reply_events(message: str, thread_id: str, model_id: str):
+def get_reply_events(
+    message: str,
+    thread_id: str,
+    model_id: str,
+    agent_type: str = "general",
+):
     from agent import get_agent, get_retry_model_candidates, is_retryable_model_error
 
     last_error = None
     for candidate_model in get_retry_model_candidates(model_id):
         try:
-            agent = get_agent(candidate_model)
+            agent = get_agent(candidate_model, agent_type)
             config = {"configurable": {"thread_id": thread_id}}
             started_tool_calls = set()
             for chunk, _ in agent.stream(
@@ -277,8 +285,15 @@ def save_chat_turn(session_id: str, thread_id: str, message: str, reply: str, is
         db.close()
 
 
-def run_chat(session_id: str, message: str, thread_id: str, is_new: bool, model_id: str):
-    reply = "".join(get_reply_chunks(message, thread_id, model_id)).strip()
+def run_chat(
+    session_id: str,
+    message: str,
+    thread_id: str,
+    is_new: bool,
+    model_id: str,
+    agent_type: str = "general",
+):
+    reply = "".join(get_reply_chunks(message, thread_id, model_id, agent_type)).strip()
     reply = reply or "I did not receive a response."
     title = save_chat_turn(session_id, thread_id, message, reply, is_new)
     return reply, title
@@ -289,12 +304,12 @@ async def chat(request: Request):
     prepared = await prepare_chat_request(request)
     if isinstance(prepared, JSONResponse):
         return prepared
-    session_id, message, thread_id, is_new, model_id = prepared
+    session_id, message, thread_id, is_new, model_id, agent_type = prepared
 
     try:
         # fixed: the agent call is blocking, so run it off the event loop
         reply, title = await run_in_threadpool(
-            run_chat, session_id, message, thread_id, is_new, model_id
+            run_chat, session_id, message, thread_id, is_new, model_id, agent_type
         )
         return JSONResponse({"reply": reply, "thread_id": thread_id, "title": title})
     except Exception as exc:
@@ -310,7 +325,7 @@ async def chat_stream(request: Request):
     prepared = await prepare_chat_request(request)
     if isinstance(prepared, JSONResponse):
         return prepared
-    session_id, message, thread_id, is_new, model_id = prepared
+    session_id, message, thread_id, is_new, model_id, agent_type = prepared
 
     def sse(payload: dict) -> str:
         return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
@@ -320,7 +335,7 @@ async def chat_stream(request: Request):
     def event_stream():
         reply_parts = []
         try:
-            for event in get_reply_events(message, thread_id, model_id):
+            for event in get_reply_events(message, thread_id, model_id, agent_type):
                 if event["type"] == "delta":
                     reply_parts.append(event["text"])
                 yield sse(event)

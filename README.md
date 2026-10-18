@@ -62,8 +62,11 @@ in the chat header. Gemini 2.5 Flash and Flash-Lite have free-tier access
 subject to Google's account eligibility and rate limits. Other Gemini models
 may have different availability or pricing. All listed models support chat and
 tool calls, and tool activity is shown in the conversation as it happens. The
-assistant can read a specific public webpage when asked. To use Qwen, install
-and start Ollama, then pull the model:
+assistant can read a specific public webpage when asked. Select **Travel
+planner** in the sidebar for travel research, airport and flight lookups,
+weather forecasts, currency conversion, and budget estimates. Live flight data
+requires an `AVIATIONSTACK_API_KEY` in `.env`. To use Qwen, install and start
+Ollama, then pull the model:
 
 ```powershell
 ollama pull qwen2.5:0.5b

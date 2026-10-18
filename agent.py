@@ -9,7 +9,17 @@ from langgraph.graph import StateGraph, START, MessagesState
 from langgraph.prebuilt import tools_condition, ToolNode
 from langgraph.checkpoint.sqlite import SqliteSaver
 import sqlite3
-from tools import wed_search, calculator, get_weather, recall_memory, rember_this, search_uploaded_document,browser_read
+from tools import (
+    ALL_TOOLS as TRAVEL_TOOLS,
+    SYSTEM_PROMPT as TRAVEL_SYSTEM_PROMPT,
+    browser_read,
+    calculator,
+    get_weather,
+    recall_memory,
+    rember_this,
+    search_uploaded_document,
+    wed_search,
+)
 from model_config import DEFAULT_MODEL, LEGACY_MODEL_ALIASES, MODEL_IDS, MODEL_OPTIONS
 
 os.environ["SSL_CERT_FILE"] = certifi.where()
@@ -726,6 +736,10 @@ def build_agent(model_name : str):
     Build a LangGraph agent using the selected Ollama or Gemini model.
     """
     selected_model = normilize_model(model_name)
+    return build_graph(_build_llm(selected_model), selected_model, "general")
+
+
+def _build_llm(selected_model: str):
     if selected_model.startswith("gemini-"):
         google_api_key = os.getenv("GOOGLE_API_KEY")
         if not google_api_key:
@@ -745,15 +759,26 @@ def build_agent(model_name : str):
             num_ctx=2048,
             num_predict=128,
         )
+    return llm
 
-    llm_with_tool = llm.bind_tools(tools)
+
+def build_travel_agent(model_name: str):
+    """Build a travel planner graph using the selected chat model."""
+    selected_model = normilize_model(model_name)
+    return build_graph(_build_llm(selected_model), selected_model, "travel")
+
+
+def build_graph(llm, selected_model: str, agent_type: str):
+    selected_tools = tools if agent_type == "general" else list(TRAVEL_TOOLS) + [wed_search]
+    system_prompt = TOOL_SYSTEM_PROMPT if agent_type == "general" else TRAVEL_SYSTEM_PROMPT
+    llm_with_tool = llm.bind_tools(selected_tools)
 
     def chat_node(state:MessagesState):
-        messages = [SystemMessage(content=TOOL_SYSTEM_PROMPT), *state["messages"]]
+        messages = [SystemMessage(content=system_prompt), *state["messages"]]
 
         response = llm_with_tool.invoke(messages)
         return {"messages":[response]}
-    tool_node = ToolNode(tools)
+    tool_node = ToolNode(selected_tools)
 
 
     graph = StateGraph(MessagesState)
@@ -766,12 +791,13 @@ def build_agent(model_name : str):
     graph.add_edge("tools","chat_node")
 
     connect = sqlite3.connect(
-        "data/langgraph_checkpoints.sqlite",
+        f"data/langgraph_checkpoints_{agent_type}_{selected_model.replace(':', '_').replace('.', '_')}.sqlite",
         check_same_thread=False
 
     )
     checkpointer =SqliteSaver(connect)
     return graph.compile(checkpointer=checkpointer)
+
 
 tools = [
     wed_search,
@@ -780,7 +806,7 @@ tools = [
     recall_memory,
     search_uploaded_document,
     rember_this,
-    browser_read
+    browser_read,
 ]
 
 
@@ -811,22 +837,29 @@ def is_retryable_model_error(exc: Exception) -> bool:
     )
 
 
-def get_agent(model_name :str | None = None):
+def get_agent(model_name: str | None = None, agent_type: str = "general"):
     """return cache langgraph agent for selected model 
     if not created yet ,create it once and resue it"""
+    if agent_type not in {"general", "travel"}:
+        raise ValueError(f"Unsupported agent type: {agent_type}")
     selected_model = normilize_model(model_name)
-    if selected_model not in _AGENT_CACHE:
-        _AGENT_CACHE[selected_model] = build_agent(selected_model)
-    return _AGENT_CACHE[selected_model]
+    cache_key = (selected_model, agent_type)
+    if cache_key not in _AGENT_CACHE:
+        builder = build_agent if agent_type == "general" else build_travel_agent
+        _AGENT_CACHE[cache_key] = builder(selected_model)
+    return _AGENT_CACHE[cache_key]
 
 
-def get_reply_chunks(message: str, thread_id: str, model_id: str):
-    from agent import get_agent
-
+def get_reply_chunks(
+    message: str,
+    thread_id: str,
+    model_id: str,
+    agent_type: str = "general",
+):
     last_error = None
     for candidate_model in get_retry_model_candidates(model_id):
         try:
-            agent = get_agent(candidate_model)
+            agent = get_agent(candidate_model, agent_type)
             config = {"configurable": {"thread_id": thread_id}}
             for chunk, _ in agent.stream(
                 {"messages": [HumanMessage(content=message)]},

@@ -219,6 +219,31 @@
       margin: 6px 10px -6px;
       color: var(--muted); font-size: 0.8rem; font-weight: 500;
     }
+
+    /* Agent switcher */
+    .agent-list { display: flex; flex-direction: column; gap: 2px; }
+    .agent-item {
+      display: flex; align-items: center; gap: 10px;
+      min-height: 38px; padding: 8px 12px;
+      border: none; border-radius: 10px;
+      background: transparent; color: var(--text);
+      font-size: 0.88rem; text-align: left; cursor: pointer;
+      transition: background 150ms ease;
+    }
+    .agent-item .icon { width: 18px; height: 18px; color: var(--muted); }
+    .agent-item:hover { background: var(--surface-hover); }
+    .agent-item.active { background: var(--active); color: var(--active-text); font-weight: 500; }
+    .agent-item.active .icon { color: var(--accent); }
+    .quick-prompts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .quick-prompt {
+      padding: 8px 12px; border: 1px solid var(--border); border-radius: 999px;
+      background: var(--surface); color: var(--text);
+      font-size: 0.82rem; cursor: pointer;
+      transition: background 150ms ease, border-color 150ms ease;
+    }
+    .quick-prompt:hover { background: var(--surface-hover); border-color: var(--accent); }
+    .quick-prompt:disabled { opacity: 0.5; cursor: not-allowed; }
+
     .conversation-list {
       flex: 1 1 auto; min-height: 0; overflow-y: auto;
       display: flex; flex-direction: column; gap: 2px;
@@ -234,6 +259,27 @@
     }
     .conversation-item:hover { background: var(--surface-hover); }
     .conversation-item.active { background: var(--active); color: var(--active-text); font-weight: 500; }
+    .conversation-row { display: flex; align-items: center; gap: 2px; }
+    .conversation-row .conversation-item { flex: 1; min-width: 0; }
+    .conversation-delete {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 32px; height: 32px; flex: 0 0 auto; padding: 0;
+      border: none; border-radius: 8px;
+      background: transparent; color: var(--muted); cursor: pointer;
+      opacity: 0; transition: opacity 150ms ease, background 150ms ease, color 150ms ease;
+    }
+    .conversation-delete .icon { width: 16px; height: 16px; }
+    .conversation-row:hover .conversation-delete,
+    .conversation-row:focus-within .conversation-delete { opacity: 1; }
+    @media (hover: none) { .conversation-delete { opacity: 1; } }
+    .conversation-delete:hover { background: var(--surface-hover); color: var(--error); }
+    .history-heading-row { display: flex; align-items: center; justify-content: space-between; }
+    .history-clear {
+      padding: 2px 8px; border: none; border-radius: 6px;
+      background: transparent; color: var(--muted);
+      font-size: 0.76rem; cursor: pointer;
+    }
+    .history-clear:hover { background: var(--surface-hover); color: var(--error); }
     .history-empty {
       margin: 0; padding: 6px 12px;
       color: var(--muted); font-size: 0.84rem; line-height: 1.5;
@@ -511,7 +557,21 @@
         <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
         <span>New chat</span>
       </button>
-      <div class="history-heading">Recent</div>
+      <div class="history-heading">Agents</div>
+      <div class="agent-list" id="agentList" role="radiogroup" aria-label="Choose agent">
+        <button class="agent-item active" type="button" role="radio" aria-checked="true" data-agent="general">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.5 7.2L4 20l1-4.5A8 8 0 1 1 21 12Z" /></svg>
+          <span>General assistant</span>
+        </button>
+        <button class="agent-item" type="button" role="radio" aria-checked="false" data-agent="travel">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-5.7-3.8-9S9.5 5.7 12 3Z" /></svg>
+          <span>Travel planner</span>
+        </button>
+      </div>
+      <div class="history-heading history-heading-row">
+        <span>Recent</span>
+        <button class="history-clear hidden" id="clearAllBtn" type="button" title="Delete all conversations">Clear all</button>
+      </div>
       <div class="conversation-list" id="conversationList" aria-live="polite">
         <p class="history-empty">Loading history…</p>
       </div>
@@ -527,7 +587,7 @@
             <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" /></svg>
           </button>
           <span class="status-dot"></span>
-          <span>AI assistant</span>
+          <span id="agentLabel">AI assistant</span>
           <span class="conversation-title" id="conversationTitle">New chat</span>
         </div>
         <div class="topbar-actions">
@@ -592,6 +652,7 @@
     const fileInput = document.getElementById('fileInput');
     const newChatBtn = document.getElementById('newChatBtn');
     const historyToggle = document.getElementById('historyToggle');
+    const clearAllBtn = document.getElementById('clearAllBtn');
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     let recognition = null;
     let isListening = false;
@@ -744,10 +805,100 @@
     buildThemePicker();
     setTheme(readSavedTheme() || defaultTheme(), false);
 
-    /* ---------- Existing application code (unchanged) ---------- */
+    /* ---------- Agent switcher ---------- */
+    const AGENTS = {
+      general: {
+        label: 'AI assistant',
+        placeholder: 'Ask SaileshGPT',
+        welcome: 'Hello! I’m your assistant. Ask me anything, and I’ll help with ideas, answers, and content.',
+        prompts: []
+      },
+      travel: {
+        label: 'Travel planner',
+        placeholder: 'Plan a trip, check a flight, or ask about a country',
+        welcome: 'Hi! I’m your travel planner. I can build trip plans, find airports, check flights, and handle weather, currency and budgets.',
+        prompts: [
+          'Give me a 7 day trip plan from Nepal to UAE',
+          'What are the main airports in Thailand?',
+          'Status of flight EK203',
+          'Weather in Dubai next week and 500 USD in AED'
+        ]
+      }
+    };
+    const THREAD_AGENTS_KEY = 'sailesh_thread_agents';
+    const agentList = document.getElementById('agentList');
+    const agentLabel = document.getElementById('agentLabel');
+    let activeAgent = 'general';
+
+    function readThreadAgents() {
+      try { return JSON.parse(localStorage.getItem(THREAD_AGENTS_KEY)) || {}; }
+      catch (error) { return {}; }
+    }
+    function saveThreadAgent(threadId, agent) {
+      if (!threadId) return;
+      const map = readThreadAgents();
+      map[threadId] = agent;
+      try { localStorage.setItem(THREAD_AGENTS_KEY, JSON.stringify(map)); }
+      catch (error) { console.warn('Could not save the agent for this chat.', error); }
+    }
+    function removeThreadAgent(threadId) {
+      const map = readThreadAgents();
+      if (!(threadId in map)) return;
+      delete map[threadId];
+      try { localStorage.setItem(THREAD_AGENTS_KEY, JSON.stringify(map)); }
+      catch (error) { console.warn('Could not update saved agents.', error); }
+    }
+    function setAgent(id, resetChat) {
+      if (!AGENTS[id]) id = 'general';
+      activeAgent = id;
+      agentList.querySelectorAll('.agent-item').forEach((button) => {
+        const on = button.dataset.agent === id;
+        button.classList.toggle('active', on);
+        button.setAttribute('aria-checked', String(on));
+      });
+      agentLabel.textContent = AGENTS[id].label;
+      input.placeholder = AGENTS[id].placeholder;
+      if (resetChat) {
+        activeThreadId = null;
+        conversationTitle.textContent = 'New chat';
+        showWelcomeMessage();
+        refreshConversationList().catch(showHistoryError);
+      }
+    }
+    function onlyWelcomeShown() {
+      return !activeThreadId && chatArea.children.length === 1 &&
+        chatArea.firstElementChild.classList.contains('bot');
+    }
+    agentList.addEventListener('click', (event) => {
+      const button = event.target.closest('.agent-item');
+      if (!button || sendBtn.disabled || button.dataset.agent === activeAgent) return;
+      setAgent(button.dataset.agent, true);
+      app.classList.remove('sidebar-open');
+      input.focus();
+    });
+
+    /* ---------- Existing application code ---------- */
     function showWelcomeMessage() {
       chatArea.replaceChildren();
-      addMessage('Hello! I’m your assistant. Ask me anything, and I’ll help with ideas, answers, and content.', 'bot');
+      const agent = AGENTS[activeAgent];
+      const bubble = addMessage(agent.welcome, 'bot');
+      if (agent.prompts.length) {
+        const row = document.createElement('div');
+        row.className = 'quick-prompts';
+        agent.prompts.forEach((prompt) => {
+          const chip = document.createElement('button');
+          chip.type = 'button';
+          chip.className = 'quick-prompt';
+          chip.textContent = prompt;
+          chip.addEventListener('click', () => {
+            if (sendBtn.disabled) return;
+            input.value = prompt;
+            sendMessage();
+          });
+          row.appendChild(chip);
+        });
+        bubble.parentElement.appendChild(row);
+      }
     }
     function addMessage(text, sender) {
       const message = document.createElement('div');
@@ -797,7 +948,19 @@
             get_weather: 'Weather lookup',
             search_uploaded_document: 'Search uploaded document',
             recall_memory: 'Recall memory',
-            rember_this: 'Save memory'
+            rember_this: 'Save memory',
+            get_today: 'Check date',
+            get_country_info: 'Country info',
+            get_main_airports: 'Main airports',
+            search_airports: 'Airport search',
+            get_flight_status: 'Flight status',
+            search_flights_by_route: 'Route flights',
+            list_airlines_on_route: 'Airlines on route',
+            get_airport_board: 'Airport board',
+            get_airline_info: 'Airline info',
+            get_weather_forecast: 'Weather forecast',
+            convert_currency: 'Currency convert',
+            estimate_trip_budget: 'Trip budget'
           })[toolName] || toolName;
           const status = document.createElement('span');
           status.className = 'tool-call-status';
@@ -872,6 +1035,7 @@
         throw new Error(conversations.error || conversations.detail || 'Could not load conversation history.');
       }
       conversationList.replaceChildren();
+      clearAllBtn.classList.toggle('hidden', !conversations.length);
       if (!conversations.length) {
         const empty = document.createElement('p');
         empty.className = 'history-empty';
@@ -880,6 +1044,8 @@
         return;
       }
       conversations.forEach((conversation) => {
+        const row = document.createElement('div');
+        row.className = 'conversation-row';
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'conversation-item';
@@ -887,7 +1053,18 @@
         button.title = conversation.title;
         button.classList.toggle('active', conversation.thread_id === activeThreadId);
         button.addEventListener('click', () => openConversation(conversation.thread_id));
-        conversationList.appendChild(button);
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'conversation-delete';
+        remove.setAttribute('aria-label', `Delete chat: ${conversation.title}`);
+        remove.title = 'Delete chat';
+        remove.innerHTML = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" /></svg>';
+        remove.addEventListener('click', (event) => {
+          event.stopPropagation();
+          deleteConversation(conversation.thread_id, conversation.title);
+        });
+        row.append(button, remove);
+        conversationList.appendChild(row);
       });
     }
     async function openConversation(threadId) {
@@ -898,6 +1075,7 @@
           throw new Error(conversation.error || 'Could not open conversation.');
         }
         activeThreadId = conversation.thread_id;
+        setAgent(readThreadAgents()[conversation.thread_id] || 'general', false);
         conversationTitle.textContent = conversation.title;
         chatArea.replaceChildren();
         conversation.messages.forEach((message) => {
@@ -907,6 +1085,43 @@
         app.classList.remove('sidebar-open');
       } catch (error) {
         addMessage(`Could not open conversation: ${error.message}`, 'bot');
+      }
+    }
+    async function requestDelete(url, fallbackMessage) {
+      const response = await fetch(url, { method: 'DELETE' });
+      if (!response.ok) {
+        let message = fallbackMessage;
+        try {
+          const data = await response.json();
+          message = data.error || data.detail || message;
+        } catch (error) { /* keep the fallback message */ }
+        throw new Error(message);
+      }
+    }
+    async function deleteConversation(threadId, title) {
+      if (sendBtn.disabled) return;
+      if (!window.confirm(`Delete "${title}"? This can't be undone.`)) return;
+      try {
+        await requestDelete(`/conversations/${encodeURIComponent(threadId)}`, 'Could not delete the conversation.');
+        removeThreadAgent(threadId);
+        if (threadId === activeThreadId) {
+          startNewChat();
+        } else {
+          await refreshConversationList();
+        }
+      } catch (error) {
+        addMessage(`Delete failed: ${error.message}`, 'bot');
+      }
+    }
+    async function clearAllConversations() {
+      if (sendBtn.disabled) return;
+      if (!window.confirm('Delete all conversations? This can\'t be undone.')) return;
+      try {
+        await requestDelete('/conversations', 'Could not delete the conversations.');
+        try { localStorage.removeItem(THREAD_AGENTS_KEY); } catch (error) { /* ignore */ }
+        startNewChat();
+      } catch (error) {
+        addMessage(`Delete failed: ${error.message}`, 'bot');
       }
     }
     function showHistoryError(error) {
@@ -923,7 +1138,14 @@
       micBtn.disabled = isBusy;
       newChatBtn.disabled = isBusy;
       historyToggle.disabled = isBusy;
-      conversationList.querySelectorAll('.conversation-item').forEach((button) => {
+      agentList.querySelectorAll('.agent-item').forEach((button) => {
+        button.disabled = isBusy;
+      });
+      chatArea.querySelectorAll('.quick-prompt').forEach((button) => {
+        button.disabled = isBusy;
+      });
+      clearAllBtn.disabled = isBusy;
+      conversationList.querySelectorAll('.conversation-item, .conversation-delete').forEach((button) => {
         button.disabled = isBusy;
       });
     }
@@ -943,7 +1165,7 @@
         addMessage('Models are unavailable. Refresh the page and try again.', 'bot');
         return;
       }
-      if (!activeThreadId && chatArea.querySelector('.message.bot')?.textContent.includes('Hello! I’m your assistant.')) {
+      if (onlyWelcomeShown()) {
         chatArea.replaceChildren();
       }
       addMessage(text, 'user');
@@ -957,7 +1179,8 @@
           body: JSON.stringify({
             message: text,
             thread_id: activeThreadId,
-            model_id: selectedModelId
+            model_id: selectedModelId,
+            agent: activeAgent
           })
         });
         if (!response.ok) {
@@ -1004,6 +1227,7 @@
                 flush();
                 replyBubble.classList.remove('typing');
                 activeThreadId = event.thread_id;
+                saveThreadAgent(event.thread_id, activeAgent);
                 conversationTitle.textContent = event.title;
                 if (!replyBubble.textContent) {
                   replyBubble.textContent = event.reply;
@@ -1033,7 +1257,7 @@
     async function handleFileSelect(event) {
       const file = event.target.files[0];
       if (!file || sendBtn.disabled) return;
-      if (!activeThreadId && chatArea.querySelector('.message.bot')?.textContent.includes('Hello! I’m your assistant.')) {
+      if (onlyWelcomeShown()) {
         chatArea.replaceChildren();
       }
       addMessage(`Selected file: ${file.name}`, 'user');
@@ -1050,6 +1274,7 @@
           throw new Error(data.error || 'Upload failed.');
         }
         activeThreadId = data.thread_id;
+        saveThreadAgent(data.thread_id, activeAgent);
         conversationTitle.textContent = data.title;
         addMessage(data.message, 'bot');
         refreshConversationList().catch(showHistoryError);
@@ -1099,6 +1324,7 @@
     }
     sendBtn.addEventListener('click', sendMessage);
     newChatBtn.addEventListener('click', startNewChat);
+    clearAllBtn.addEventListener('click', clearAllConversations);
     historyToggle.addEventListener('click', () => app.classList.toggle('sidebar-open'));
     app.addEventListener('click', (event) => {
       if (event.target === app && app.classList.contains('sidebar-open')) {
